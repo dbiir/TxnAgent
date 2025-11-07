@@ -1,9 +1,8 @@
 package org.dbiir.txnsails.analysis;
 
+import java.util.HashMap;
 import lombok.Getter;
 import org.dbiir.txnsails.common.types.ColumnType;
-
-import java.util.HashMap;
 
 @Getter
 public class TableInfo {
@@ -35,9 +34,6 @@ public class TableInfo {
 
   @Override
   public String toString() {
-    return "TableSchema{" +
-            "tableName='" + tableName + '\'' +
-            ", columns=" + columns +
-            '}';
+    return "TableSchema{" + "tableName='" + tableName + '\'' + ", columns=" + columns + '}';
   }
 }

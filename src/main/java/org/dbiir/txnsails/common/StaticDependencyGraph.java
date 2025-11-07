@@ -45,7 +45,8 @@ public class StaticDependencyGraph {
     edge.setIdxInFrom(idxInFrom);
     edge.setIdxInTo(idxInTo);
     adjacencyList.get(from).add(edge);
-    System.out.println("Edge: {Type: " + type + ", From: " + from.getName() + ", To: " + to.getName() + "}");
+    System.out.println(
+        "Edge: {Type: " + type + ", From: " + from.getName() + ", To: " + to.getName() + "}");
   }
 
   public List<StaticDependencyGraphEdge> getDependencies(TransactionTemplate template) {

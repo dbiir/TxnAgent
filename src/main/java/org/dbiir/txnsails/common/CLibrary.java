@@ -9,5 +9,6 @@ public interface CLibrary extends Library {
   CLibrary INSTANCE = Native.load(Platform.isWindows() ? "msvcrt" : "c", CLibrary.class);
 
   int sched_setaffinity(int pid, int cpusetsize, Pointer cpuset);
+
   int sched_getaffinity(int pid, int cpusetsize, Pointer cpuset);
 }

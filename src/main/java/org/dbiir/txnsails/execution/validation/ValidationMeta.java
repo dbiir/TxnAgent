@@ -42,8 +42,7 @@ public class ValidationMeta {
     // calculate the id for validation
     switch (ValidationMetaTable.getInstance().getWorkload()) {
       case "smallbank":
-        idForValidation =
-            SmallBankConstants.calculateUniqueId(uniqueKeys, templateSQL.getTable());
+        idForValidation = SmallBankConstants.calculateUniqueId(uniqueKeys, templateSQL.getTable());
         break;
       case "tpcc":
         idForValidation = TPCCConstants.calculateUniqueId(uniqueKeys, templateSQL.getTable());

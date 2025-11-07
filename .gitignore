@@ -37,6 +37,9 @@ build/
 ### Mac OS ###
 .DS_Store
 
+### GRADLE ###
+.gradle/
+
 ### TXNSAILS ###
 config/
 metas/

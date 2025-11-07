@@ -7,7 +7,7 @@ import org.dbiir.txnsails.common.types.CCType;
 import org.dbiir.txnsails.common.types.LockType;
 
 public class ValidationLock {
-  private static final long EXPIRED_SPAN = 1000;  // the expired span is 1s
+  private static final long EXPIRED_SPAN = 1000; // the expired span is 1s
   private LockType type; // SH for read validation, EX for write commit check
   private final Lock lock;
   private int count;

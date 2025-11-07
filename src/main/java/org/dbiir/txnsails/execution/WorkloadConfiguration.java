@@ -20,9 +20,9 @@ package org.dbiir.txnsails.execution;
 import java.sql.Connection;
 import lombok.Getter;
 import lombok.Setter;
+import org.dbiir.txnsails.common.JacksonXmlConfiguration;
 import org.dbiir.txnsails.common.types.CCType;
 import org.dbiir.txnsails.common.types.DatabaseType;
-import org.dbiir.txnsails.common.JacksonXmlConfiguration;
 import org.dbiir.txnsails.worker.Adapter;
 
 public class WorkloadConfiguration {

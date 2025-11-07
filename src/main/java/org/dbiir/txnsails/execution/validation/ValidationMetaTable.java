@@ -8,11 +8,11 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import lombok.Getter;
-import org.dbiir.txnsails.common.types.CCType;
-import org.dbiir.txnsails.common.types.LockType;
 import org.dbiir.txnsails.common.constants.SmallBankConstants;
 import org.dbiir.txnsails.common.constants.TPCCConstants;
 import org.dbiir.txnsails.common.constants.YCSBConstants;
+import org.dbiir.txnsails.common.types.CCType;
+import org.dbiir.txnsails.common.types.LockType;
 
 public class ValidationMetaTable {
   private static final ValidationMetaTable INSTANCE;
@@ -280,8 +280,9 @@ public class ValidationMetaTable {
 
     // gc: shrink the validation lock list
     if (validationBucketLocks.get(table)[bucketNum].writeLock().tryLock()) {
-      lockList.removeIf(lock -> lock.isExpired() && lock.getId() > getHashSizeByRelationName(table)
-              && lock.free());
+      lockList.removeIf(
+          lock ->
+              lock.isExpired() && lock.getId() > getHashSizeByRelationName(table) && lock.free());
       validationBucketLocks.get(table)[bucketNum].writeLock().unlock();
     }
   }

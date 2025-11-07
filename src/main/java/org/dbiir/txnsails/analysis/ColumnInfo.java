@@ -1,8 +1,7 @@
 package org.dbiir.txnsails.analysis;
 
-import org.dbiir.txnsails.common.types.ColumnType;
-
 import lombok.Getter;
+import org.dbiir.txnsails.common.types.ColumnType;
 
 @Getter
 public class ColumnInfo {
@@ -34,10 +33,15 @@ public class ColumnInfo {
 
   @Override
   public String toString() {
-    return "Column{" +
-            "name='" + name + '\'' +
-            ", type='" + type + '\'' +
-            ", isPrimaryKey=" + isPrimaryKey +
-            '}';
+    return "Column{"
+        + "name='"
+        + name
+        + '\''
+        + ", type='"
+        + type
+        + '\''
+        + ", isPrimaryKey="
+        + isPrimaryKey
+        + '}';
   }
 }

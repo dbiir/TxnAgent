@@ -6,8 +6,7 @@ import net.sf.jsqlparser.schema.Column;
 
 public class ConditionInfo {
   private final Column column;
-  @Getter
-  private final String upperCaseColumnName;
+  @Getter private final String upperCaseColumnName;
   private final JdbcParameter parameter;
 
   public ConditionInfo(Column column, JdbcParameter parameter) {

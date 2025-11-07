@@ -5,7 +5,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Collectors;
-
 import lombok.Getter;
 import lombok.Setter;
 import net.sf.jsqlparser.JSQLParserException;
@@ -132,9 +131,10 @@ public class TemplateSQL implements Cloneable {
       }
     } catch (Exception e) {
       System.out.println(e.toString());
-      System.out.println(Arrays.stream(e.getStackTrace())
-          .map(StackTraceElement::toString)
-          .collect(Collectors.joining("\n")));
+      System.out.println(
+          Arrays.stream(e.getStackTrace())
+              .map(StackTraceElement::toString)
+              .collect(Collectors.joining("\n")));
     }
   }
 
@@ -143,7 +143,7 @@ public class TemplateSQL implements Cloneable {
       return;
     }
 
-    for (SelectItem selectItem: selectItemList) {
+    for (SelectItem selectItem : selectItemList) {
       if (selectItem instanceof SelectExpressionItem selectExpressionItem) {
         if (selectExpressionItem.getExpression() instanceof Column column) {
           columnList.add(column);
@@ -190,7 +190,8 @@ public class TemplateSQL implements Cloneable {
 
     } catch (Exception e) {
       System.out.println(e.toString());
-      System.out.println(Arrays.stream(e.getStackTrace())
+      System.out.println(
+          Arrays.stream(e.getStackTrace())
               .map(StackTraceElement::toString)
               .collect(Collectors.joining("\n")));
       return null;
@@ -209,9 +210,10 @@ public class TemplateSQL implements Cloneable {
       LongValue oneValue = new LongValue(1); // Represents the constant 1
       Addition addExpression = new Addition(); // Addition represents the "vid + 1" operation
       Column vidRightColumn = new Column("vid");
-      if (updateStatement.getFromItem() != null && updateStatement.getFromItem().getAlias() != null
-              && updateStatement.getFromItem().getAlias().isUseAs()
-              && updateStatement.getFromItem() instanceof Table) {
+      if (updateStatement.getFromItem() != null
+          && updateStatement.getFromItem().getAlias() != null
+          && updateStatement.getFromItem().getAlias().isUseAs()
+          && updateStatement.getFromItem() instanceof Table) {
         vidRightColumn.setTable((Table) updateStatement.getFromItem());
       }
       addExpression.setLeftExpression(vidRightColumn); // Left side is the "vid" column
@@ -220,20 +222,25 @@ public class TemplateSQL implements Cloneable {
       // Add the SetExpression to the UPDATE statement
       updateStatement
           .getUpdateSets()
-          .add(new UpdateSet(vidLeftColumn, addExpression)); // Add "vid = vid + 1" to the SET clause
+          .add(
+              new UpdateSet(vidLeftColumn, addExpression)); // Add "vid = vid + 1" to the SET clause
 
       // Add `vid` to the RETURNING clause
       if (!selectAllAttr) {
         Column vidReturnColumn = new Column("vid");
-        if (updateStatement.getFromItem() != null && updateStatement.getFromItem().getAlias() != null
-                && updateStatement.getFromItem().getAlias().isUseAs()
-                && updateStatement.getFromItem() instanceof Table) {
+        if (updateStatement.getFromItem() != null
+            && updateStatement.getFromItem().getAlias() != null
+            && updateStatement.getFromItem().getAlias().isUseAs()
+            && updateStatement.getFromItem() instanceof Table) {
           vidReturnColumn.setTable((Table) updateStatement.getFromItem());
         }
         if (updateStatement.getReturningExpressionList() == null) {
-          updateStatement.setReturningExpressionList(List.of(new SelectExpressionItem(vidReturnColumn)));
+          updateStatement.setReturningExpressionList(
+              List.of(new SelectExpressionItem(vidReturnColumn)));
         } else {
-          updateStatement.getReturningExpressionList().add(new SelectExpressionItem(vidReturnColumn));
+          updateStatement
+              .getReturningExpressionList()
+              .add(new SelectExpressionItem(vidReturnColumn));
         }
         columnList.add(new Column("vid"));
       }
@@ -244,7 +251,8 @@ public class TemplateSQL implements Cloneable {
 
     } catch (Exception e) {
       System.out.println(e.toString());
-      System.out.println(Arrays.stream(e.getStackTrace())
+      System.out.println(
+          Arrays.stream(e.getStackTrace())
               .map(StackTraceElement::toString)
               .collect(Collectors.joining("\n")));
       return null;
@@ -360,11 +368,12 @@ public class TemplateSQL implements Cloneable {
         for (UpdateSet updateSet : updateSets) {
           List<Column> columns = updateSet.getColumns();
           for (Column column : columns) {
-            if (updateSet.getExpressions().get(columns.indexOf(column)) instanceof JdbcParameter param1) {
+            if (updateSet.getExpressions().get(columns.indexOf(column))
+                instanceof JdbcParameter param1) {
               allPlaceholders.add(new ConditionInfo(column, param1));
             }
           }
-          for (Expression expression: updateSet.getExpressions()) {
+          for (Expression expression : updateSet.getExpressions()) {
             findJdbcParametersInSet(expression);
           }
         }
@@ -386,10 +395,12 @@ public class TemplateSQL implements Cloneable {
       Expression leftExpression = binaryExpression.getLeftExpression();
       Expression rightExpression = binaryExpression.getRightExpression();
 
-      if (rightExpression instanceof JdbcParameter param1 && leftExpression instanceof Column column1) {
+      if (rightExpression instanceof JdbcParameter param1
+          && leftExpression instanceof Column column1) {
         allPlaceholders.add(new ConditionInfo(column1, param1));
       }
-      if (rightExpression instanceof Column column2 && leftExpression instanceof JdbcParameter param2) {
+      if (rightExpression instanceof Column column2
+          && leftExpression instanceof JdbcParameter param2) {
         allPlaceholders.add(new ConditionInfo(column2, param2));
       }
 
@@ -404,11 +415,13 @@ public class TemplateSQL implements Cloneable {
       Expression leftExpression = binaryExpression.getLeftExpression();
       Expression rightExpression = binaryExpression.getRightExpression();
 
-      if (rightExpression instanceof JdbcParameter param1 && leftExpression instanceof Column column1) {
+      if (rightExpression instanceof JdbcParameter param1
+          && leftExpression instanceof Column column1) {
         allPlaceholders.add(new ConditionInfo(column1, param1));
         wherePlaceholders.add(new ConditionInfo(column1, param1));
       }
-      if (rightExpression instanceof Column column2 && leftExpression instanceof JdbcParameter param2) {
+      if (rightExpression instanceof Column column2
+          && leftExpression instanceof JdbcParameter param2) {
         allPlaceholders.add(new ConditionInfo(column2, param2));
         wherePlaceholders.add(new ConditionInfo(column2, param2));
       }

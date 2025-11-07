@@ -1,0 +1,73 @@
+plugins {
+    id 'java'
+    id 'application'
+    id 'com.gradleup.shadow' version '9.2.0' // For shading (equivalent to maven-shade-plugin)
+    id 'com.diffplug.spotless' version '6.21.0' // For code formatting (equivalent to fmt-maven-plugin)
+    id 'org.ajoberstar.grgit' version '5.2.0' // For Git commit info (equivalent to git-commit-id-plugin)
+}
+
+group = 'org.dbiir.txnsails'
+version = '2.0'
+description = 'TxnSailsServer'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+application {
+    mainClass = 'org.dbiir.txnsails.TxnSailsServer'
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'io.netty:netty-transport:4.1.116.Final'
+    implementation 'io.netty:netty-buffer:4.1.116.Final'
+    implementation 'io.netty:netty-common:4.1.116.Final'
+    implementation 'io.netty:netty-codec:4.1.116.Final'
+    compileOnly 'org.projectlombok:lombok:1.18.42'
+    annotationProcessor 'org.projectlombok:lombok:1.18.42'
+    implementation 'commons-cli:commons-cli:1.5.0'
+    implementation 'org.json:json:20240303'
+    implementation 'org.apache.commons:commons-collections4:4.4'
+    implementation 'org.apache.commons:commons-lang3:3.12.0'
+    implementation 'commons-io:commons-io:2.14.0'
+    implementation 'com.github.jsqlparser:jsqlparser:4.5'
+    implementation 'commons-jxpath:commons-jxpath:1.3'
+    implementation 'org.postgresql:postgresql:42.7.4'
+    implementation 'com.fasterxml.jackson.dataformat:jackson-dataformat-xml:2.13.5'
+    implementation 'net.java.dev.jna:jna:5.16.0'
+}
+
+tasks.withType(JavaCompile) {
+    options.compilerArgs += ['-Xlint:all,-processing', '-implicit:class']
+    options.deprecation = true
+    options.warnings = true
+    sourceCompatibility = '21'
+    targetCompatibility = '21'
+}
+
+tasks.register('cleanResults') {
+    doLast {
+        delete 'results'
+    }
+}
+
+shadowJar {
+    archiveBaseName.set("${project.name}-fat")
+    manifest {
+        attributes(
+            'Main-Class': application.mainClass.get()
+        )
+    }
+    exclude('META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA')
+}
+
+spotless {
+    java {
+        googleJavaFormat()
+    }
+}

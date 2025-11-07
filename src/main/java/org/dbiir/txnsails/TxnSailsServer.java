@@ -49,14 +49,14 @@ public class TxnSailsServer {
   private static ChannelFuture f;
 
   public static void main(String[] args)
-          throws InterruptedException, ParseException, SQLException, IOException {
+      throws InterruptedException, ParseException, SQLException, IOException {
     CommandLineParser parser = new DefaultParser();
     Options options =
-            new Options()
-                    .addOption("c", "config", true, "[required] Workload configuration file")
-                    .addOption("d", "directory", true, "Base directory for the meta files")
-                    .addOption("s", "schema", true, "Base directory for the schema sql files")
-                    .addOption("p", "phase", true, "Online predict or offline training");
+        new Options()
+            .addOption("c", "config", true, "[required] Workload configuration file")
+            .addOption("d", "directory", true, "Base directory for the meta files")
+            .addOption("s", "schema", true, "Base directory for the schema sql files")
+            .addOption("p", "phase", true, "Online predict or offline training");
 
     CommandLine argsLine = parser.parse(options, args);
 
@@ -74,32 +74,32 @@ public class TxnSailsServer {
     WorkloadConfiguration workloadConfiguration = loadConfiguration(xmlConfig);
     List<Connection> auxiliaryConnectionList = makeAuxiliaryConnections(workloadConfiguration);
     ValidationMetaTable.getInstance()
-            .initHotspot(workloadConfiguration.getBenchmarkName(), auxiliaryConnectionList);
+        .initHotspot(workloadConfiguration.getBenchmarkName(), auxiliaryConnectionList);
     EventLoopGroup bossGroup = new NioEventLoopGroup();
     EventLoopGroup workerGroup = new NioEventLoopGroup();
 
     try {
       createFlushThread(
-              argsLine,
-              workloadConfiguration.getBenchmarkName(),
-              workloadConfiguration.getConcurrencyControlType());
+          argsLine,
+          workloadConfiguration.getBenchmarkName(),
+          workloadConfiguration.getConcurrencyControlType());
       System.out.println("Create Flush Thread");
       ServerBootstrap b = new ServerBootstrap();
       b.group(bossGroup, workerGroup)
-              .channel(NioServerSocketChannel.class)
-              .childHandler(
-                      new ChannelInitializer<SocketChannel>() {
-                        @Override
-                        public void initChannel(SocketChannel ch) throws Exception {
-                          ch.pipeline().addLast(new LengthFieldBasedFrameDecoder(4096, 0, 4, 0, 4));
-                          // Encoder
-                          ch.pipeline().addLast(new LengthFieldPrepender(4));
-                          ch.pipeline().addLast(new StringDecoder());
-                          ch.pipeline().addLast(new StringEncoder());
-                          ch.pipeline()
-                                  .addLast(new ServerHandler(workloadConfiguration, genWorkerId.addAndGet(1)));
-                        }
-                      });
+          .channel(NioServerSocketChannel.class)
+          .childHandler(
+              new ChannelInitializer<SocketChannel>() {
+                @Override
+                public void initChannel(SocketChannel ch) throws Exception {
+                  ch.pipeline().addLast(new LengthFieldBasedFrameDecoder(4096, 0, 4, 0, 4));
+                  // Encoder
+                  ch.pipeline().addLast(new LengthFieldPrepender(4));
+                  ch.pipeline().addLast(new StringDecoder());
+                  ch.pipeline().addLast(new StringEncoder());
+                  ch.pipeline()
+                      .addLast(new ServerHandler(workloadConfiguration, genWorkerId.addAndGet(1)));
+                }
+              });
 
       f = b.bind(9876).sync();
       f.channel().closeFuture().sync();
@@ -153,15 +153,15 @@ public class TxnSailsServer {
   }
 
   private static List<Connection> makeAuxiliaryConnections(WorkloadConfiguration workConf)
-          throws SQLException {
+      throws SQLException {
     List<Connection> connectionList = new ArrayList<>(16);
     for (int i = 0; i < DEFAULT_AUXILIARY_THREAD_NUM; i++) {
       if (StringUtils.isEmpty(workConf.getUsername())) {
         connectionList.add(DriverManager.getConnection(workConf.getUrl()));
       } else {
         connectionList.add(
-                DriverManager.getConnection(
-                        workConf.getUrl(), workConf.getUsername(), workConf.getPassword()));
+            DriverManager.getConnection(
+                workConf.getUrl(), workConf.getUsername(), workConf.getPassword()));
       }
     }
     return connectionList;
@@ -218,9 +218,7 @@ public class TxnSailsServer {
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
-      System.out.println(
-              "Client disconnected: "
-                      + ctx.channel().remoteAddress());
+      System.out.println("Client disconnected: " + ctx.channel().remoteAddress());
       super.channelInactive(ctx);
       if (workThread != null) {
         workThread.interrupt();
@@ -298,7 +296,8 @@ public class TxnSailsServer {
       return args;
     }
 
-    private void sendResponse(ChannelHandlerContext ctx, String response) throws InterruptedException {
+    private void sendResponse(ChannelHandlerContext ctx, String response)
+        throws InterruptedException {
       System.out.println("Sending: " + response);
       ByteBuf resp = ctx.alloc().buffer(response.length());
       resp.writeBytes(response.getBytes(StandardCharsets.UTF_8));

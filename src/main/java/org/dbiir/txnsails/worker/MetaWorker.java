@@ -1,11 +1,9 @@
 package org.dbiir.txnsails.worker;
 
-import com.sun.jna.Library;
+import com.sun.jna.Memory;
 import com.sun.jna.Native;
 import com.sun.jna.Platform;
 import com.sun.jna.Pointer;
-import com.sun.jna.Memory;
-
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -13,7 +11,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-
+import lombok.Getter;
+import lombok.Setter;
 import org.dbiir.txnsails.analysis.ChordAbsentCycleFinder;
 import org.dbiir.txnsails.analysis.SchemaInfo;
 import org.dbiir.txnsails.common.*;
@@ -21,9 +20,6 @@ import org.dbiir.txnsails.common.constants.SmallBankConstants;
 import org.dbiir.txnsails.common.constants.TPCCConstants;
 import org.dbiir.txnsails.common.constants.YCSBConstants;
 import org.dbiir.txnsails.common.types.DependencyType;
-
-import lombok.Getter;
-import lombok.Setter;
 
 public class MetaWorker {
   @Getter private static MetaWorker INSTANCE = new MetaWorker();
@@ -43,8 +39,7 @@ public class MetaWorker {
   public static int MAX_AVAILABLE_CORES = 1;
 
   // error handling
-  public static final String ERROR_FORMATTER =
-          "ERROR#{0}#{1}#{2}"; // reason, SQLState, vendorCode
+  public static final String ERROR_FORMATTER = "ERROR#{0}#{1}#{2}"; // reason, SQLState, vendorCode
 
   public MetaWorker() {
     globalTemplateTypeGenerator = 1;
@@ -53,7 +48,7 @@ public class MetaWorker {
 
   public synchronized void registerTemplateName(String template_name) {
     templates.computeIfAbsent(
-            template_name, k -> new TransactionTemplate(template_name, globalTemplateTypeGenerator));
+        template_name, k -> new TransactionTemplate(template_name, globalTemplateTypeGenerator));
     globalTemplateTypeGenerator <<= 1;
   }
 
@@ -63,7 +58,7 @@ public class MetaWorker {
   }
 
   public int registerTemplateSQL(
-          String template_name, int op, String relation, String sql, int idx) {
+      String template_name, int op, String relation, String sql, int idx) {
     templates.computeIfAbsent(template_name, k -> new TransactionTemplate(template_name));
     templates.get(template_name).setSkipIndex(idx, true);
     return templates.get(template_name).addTemplateSQL(op, relation, sql);
@@ -119,7 +114,7 @@ public class MetaWorker {
     // analysis SI
     System.out.println("====== SI ======");
     Set<StaticDependencyCycle> cyclesWithTwoConsecutiveReadWrite =
-            findCyclesWithTwoConsecutiveReadWrite(allCycles);
+        findCyclesWithTwoConsecutiveReadWrite(allCycles);
     for (StaticDependencyCycle cycle : cyclesWithTwoConsecutiveReadWrite) {
       System.out.println(cycle);
     }
@@ -128,15 +123,15 @@ public class MetaWorker {
       List<StaticDependencyGraphEdge> edges = cycle.edges();
       for (int i = 0; i < edges.size(); i++) {
         if (edges.get(i).getType() == DependencyType.READ_WRITE
-                && edges.get((i + 1) % edges.size()).getType() == DependencyType.READ_WRITE) {
+            && edges.get((i + 1) % edges.size()).getType() == DependencyType.READ_WRITE) {
           edges
-                  .get((i + 1) % edges.size())
-                  .getFrom()
-                  .setSQLRewriteByIndex(edges.get((i + 1) % edges.size()).getIdxInFrom(), "SI");
+              .get((i + 1) % edges.size())
+              .getFrom()
+              .setSQLRewriteByIndex(edges.get((i + 1) % edges.size()).getIdxInFrom(), "SI");
           edges
-                  .get((i + 1) % edges.size())
-                  .getTo()
-                  .setSQLRewriteByIndex(edges.get((i + 1) % edges.size()).getIdxInTo(), "SI");
+              .get((i + 1) % edges.size())
+              .getTo()
+              .setSQLRewriteByIndex(edges.get((i + 1) % edges.size()).getIdxInTo(), "SI");
         }
       }
     }
@@ -158,14 +153,14 @@ public class MetaWorker {
   }
 
   private Set<StaticDependencyCycle> findCyclesWithTwoConsecutiveReadWrite(
-          Set<StaticDependencyCycle> allCycles) {
+      Set<StaticDependencyCycle> allCycles) {
     Set<StaticDependencyCycle> result = new HashSet<>();
 
     for (StaticDependencyCycle cycle : allCycles) {
       List<StaticDependencyGraphEdge> edges = cycle.edges();
       for (int i = 0; i < edges.size(); i++) {
         if (edges.get(i).getType() == DependencyType.READ_WRITE
-                && edges.get((i + 1) % edges.size()).getType() == DependencyType.READ_WRITE) {
+            && edges.get((i + 1) % edges.size()).getType() == DependencyType.READ_WRITE) {
           result.add(cycle);
           break; // find a cycle with two consecutive RW
         }
