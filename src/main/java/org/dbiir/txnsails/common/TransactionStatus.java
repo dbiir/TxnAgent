@@ -3,6 +3,9 @@ package org.dbiir.txnsails.common;
 public enum TransactionStatus {
   IDLE("Idle"), // none transaction
   ACTIVE("Active"), // in processing transaction
+  PREPARED("Prepared"),
+  VALIDATED("Validated"),
+  PREPARE_FAILED("PrepareFailed"),
   COMMITTED("Committed"),
   ROLLBACK("Rollback");
 

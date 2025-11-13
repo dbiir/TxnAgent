@@ -89,6 +89,9 @@ public class WorkloadConfiguration {
       case "SI":
         this.concurrencyControlType = CCType.SI;
         break;
+      case "FS":
+        this.concurrencyControlType = CCType.FS;
+        break;
       default:
         this.concurrencyControlType = CCType.NUM_CC;
     }
