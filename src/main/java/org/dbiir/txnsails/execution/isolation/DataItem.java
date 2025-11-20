@@ -1,13 +1,12 @@
 package org.dbiir.txnsails.execution.isolation;
 
-import lombok.Getter;
-import lombok.Setter;
-import org.dbiir.txnsails.execution.validation.ValidationMeta;
-
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import lombok.Getter;
+import lombok.Setter;
+import org.dbiir.txnsails.execution.validation.ValidationMeta;
 
 // not thread-safe
 public class DataItem {
@@ -17,10 +16,15 @@ public class DataItem {
   @Getter private int writeCount;
   private long lease;
   private final List<RecordVersion> versions;
-  @Getter private final List<Transaction> readTransactions; // transactions that have read this data item and not committed yet
+
+  @Getter
+  private final List<Transaction>
+      readTransactions; // transactions that have read this data item and not committed yet
+
   private final AtomicLong writeTransaction;
   @Getter private long maxReadTimestamp;
-  private final ReadWriteLock lock = new ReentrantReadWriteLock(); // support atomic modification of readTransactions
+  private final ReadWriteLock lock =
+      new ReentrantReadWriteLock(); // support atomic modification of readTransactions
 
   public DataItem(int key) {
     this.key = key;
@@ -90,9 +94,7 @@ public class DataItem {
     this.writeTransaction.compareAndSet(tid, 0);
   }
 
-  public void readCommit(Transaction transaction, ValidationMeta meta) {
-
-  }
+  public void readCommit(Transaction transaction, ValidationMeta meta) {}
 
   public void writeCommit(Transaction transaction, ValidationMeta meta) {
 
@@ -100,9 +102,9 @@ public class DataItem {
   }
 
   public boolean canRemove() {
-    return System.currentTimeMillis() > lease &&
-            this.readTransactions.isEmpty() &&
-            this.writeTransaction.get() == 0;
+    return System.currentTimeMillis() > lease
+        && this.readTransactions.isEmpty()
+        && this.writeTransaction.get() == 0;
   }
 
   public void installVersion(int version, long commitTimestamp) {
@@ -110,7 +112,8 @@ public class DataItem {
   }
 
   public void clearVersions(long timestamp) {
-    // remove all versions whose timestamp is greater than the given timestamp from the second version
+    // remove all versions whose timestamp is greater than the given timestamp from the second
+    // version
     versions.subList(1, versions.size()).removeIf(rv -> rv.timestamp() > timestamp);
   }
 }

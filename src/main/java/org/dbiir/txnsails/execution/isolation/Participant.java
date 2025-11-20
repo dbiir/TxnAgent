@@ -2,16 +2,10 @@ package org.dbiir.txnsails.execution.isolation;
 
 import java.sql.Connection;
 import java.sql.SQLException;
-import java.util.List;
-
-
-import org.dbiir.txnsails.common.TransactionStatus;
-import org.dbiir.txnsails.common.ValidationStatus;
-
 import lombok.Getter;
 import lombok.Setter;
-import org.dbiir.txnsails.common.types.IsolationLevelType;
-import org.dbiir.txnsails.common.types.LockType;
+import org.dbiir.txnsails.common.TransactionStatus;
+import org.dbiir.txnsails.common.ValidationStatus;
 import org.dbiir.txnsails.execution.agent.ConcurrencyControlAgent;
 import org.dbiir.txnsails.execution.validation.ValidationMeta;
 import org.dbiir.txnsails.execution.validation.ValidationSet;
@@ -63,7 +57,10 @@ public class Participant {
       // do timestamp adjustment
       DataItem dataItem = writeSet.get(validationPhase).getDataItem();
       if (!dataItem.addVirtualWriteLock(transaction.getId())) {
-        String msg = "Transaction " + transaction.getId() + " failed to add virtual write lock for item, awful update !!!";
+        String msg =
+            "Transaction "
+                + transaction.getId()
+                + " failed to add virtual write lock for item, awful update !!!";
         logger.warn(msg);
         validationStatus = ValidationStatus.FAILED;
         throw new SQLException(msg, "500");
@@ -71,11 +68,15 @@ public class Participant {
 
       adjustTimestamp(transaction, dataItem);
       transaction.spinLock();
-      transaction.setLowerBound(Math.max(transaction.getLowerBound(), dataItem.getMaxReadTimestamp() + 1));
+      transaction.setLowerBound(
+          Math.max(transaction.getLowerBound(), dataItem.getMaxReadTimestamp() + 1));
       transaction.spinUnlock();
 
       if (transaction.getLowerBound() > transaction.getUpperBound()) {
-        String msg = "Transaction " + transaction.getId() + " failed in validation phase for write set, LB > UB !!!";
+        String msg =
+            "Transaction "
+                + transaction.getId()
+                + " failed in validation phase for write set, LB > UB !!!";
         logger.warn(msg);
         validationStatus = ValidationStatus.FAILED;
         throw new SQLException(msg, "500");
@@ -122,7 +123,7 @@ public class Participant {
 
   private void adjustTimestamp(Transaction t_i, DataItem dataItem) {
     dataItem.acquireReadLock();
-    for (Transaction t_j: dataItem.getReadTransactions()) {
+    for (Transaction t_j : dataItem.getReadTransactions()) {
       // add spinlock to concurrent transaction
       if (t_i.getId() < t_j.getId()) {
         t_i.spinLock();
@@ -141,7 +142,8 @@ public class Participant {
       }
 
       if (t_i.getLowerBound() < t_j.getLowerBound()) {
-        t_i.setLowerBound(t_j.getLowerBound() + ConcurrencyControlAgent.getInstance().getMu(t_i, t_j));
+        t_i.setLowerBound(
+            t_j.getLowerBound() + ConcurrencyControlAgent.getInstance().getMu(t_i, t_j));
       }
       t_j.setLowerBound(Math.min(t_j.getUpperBound(), t_i.getLowerBound() - 1));
 

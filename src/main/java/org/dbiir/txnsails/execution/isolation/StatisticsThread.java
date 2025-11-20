@@ -1,19 +1,17 @@
 package org.dbiir.txnsails.execution.isolation;
 
+import java.io.IOException;
+import java.net.Socket;
 import lombok.Setter;
 import org.dbiir.txnsails.common.types.CCType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
-import java.net.Socket;
-
 public class StatisticsThread extends Thread {
   private static final Logger logger = LoggerFactory.getLogger(StatisticsThread.class);
   private static final String ip = "localhost";
   private static final int port = 8765;
-  @Setter
-  private String outputFilePrefix;
+  @Setter private String outputFilePrefix;
   private CCType ccType;
   private Socket socket;
 

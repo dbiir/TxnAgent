@@ -1,12 +1,11 @@
 package org.dbiir.txnsails.execution.isolation;
 
+import java.util.LinkedList;
+import java.util.List;
 import lombok.Getter;
 import lombok.Setter;
 import org.dbiir.txnsails.common.TransactionStatus;
 import org.dbiir.txnsails.execution.utils.SpinLock;
-
-import java.util.LinkedList;
-import java.util.List;
 
 public class Transaction {
   @Getter private long id;

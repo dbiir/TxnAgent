@@ -1,16 +1,5 @@
 package org.dbiir.txnsails.execution.isolation;
 
-import org.dbiir.txnsails.common.AsyncResultWrapper;
-import org.dbiir.txnsails.common.TemplateSQL;
-import org.dbiir.txnsails.common.TransactionStatus;
-import org.dbiir.txnsails.common.ValidationStatus;
-import org.dbiir.txnsails.common.constants.SmallBankConstants;
-import org.dbiir.txnsails.common.constants.TPCCConstants;
-import org.dbiir.txnsails.common.constants.YCSBConstants;
-import org.dbiir.txnsails.execution.validation.ValidationMeta;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.util.ArrayList;
@@ -19,6 +8,12 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import org.dbiir.txnsails.common.AsyncResultWrapper;
+import org.dbiir.txnsails.common.TransactionStatus;
+import org.dbiir.txnsails.common.ValidationStatus;
+import org.dbiir.txnsails.execution.validation.ValidationMeta;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class TransactionManager {
   private static final Logger logger = LoggerFactory.getLogger(TransactionManager.class);
@@ -27,10 +22,11 @@ public class TransactionManager {
 
   private String workload;
   // active transaction list
-  private final List<List<Transaction>> activeTransactionList = new ArrayList<>(TRANSACTION_HASH_SIZE);
+  private final List<List<Transaction>> activeTransactionList =
+      new ArrayList<>(TRANSACTION_HASH_SIZE);
   private final List<ReadWriteLock> activeTransactionLocks = new ArrayList<>(TRANSACTION_HASH_SIZE);
-  // data item metadata, including hot, medium, low contention items
 
+  // data item metadata, including hot, medium, low contention items
 
   public TransactionManager() {
     for (int i = 0; i < TRANSACTION_HASH_SIZE; i++) {
@@ -63,8 +59,14 @@ public class TransactionManager {
 
       // serial execution
       if (hybridTransaction) {
-        try (PreparedStatement prepare = p.getConnection().prepareStatement(
-                "PREPARE TRANSACTION '" + transaction.getId() + "-" + p.getIsolationLevel() + "'");) {
+        try (PreparedStatement prepare =
+            p.getConnection()
+                .prepareStatement(
+                    "PREPARE TRANSACTION '"
+                        + transaction.getId()
+                        + "-"
+                        + p.getIsolationLevel()
+                        + "'"); ) {
           prepare.execute();
           p.setStatus(TransactionStatus.PREPARED);
         } catch (SQLException ex) {
@@ -79,13 +81,23 @@ public class TransactionManager {
   public void commit(Transaction transaction, AsyncResultWrapper[] results) {
     for (Participant p : transaction.getParticipants()) {
       if (p.getValidationStatus() != ValidationStatus.VALIDATED) {
-        logger.error(Thread.currentThread().getName() + " The transaction is not validated !!!" + p.getValidationStatus());
+        logger.error(
+            Thread.currentThread().getName()
+                + " The transaction is not validated !!!"
+                + p.getValidationStatus());
         return;
       }
       if (p.getConnection() != null) {
         try {
           if (p.getStatus() == TransactionStatus.PREPARED) {
-            PreparedStatement prepare = p.getConnection().prepareStatement("COMMIT PREPARED '" + transaction.getId() + "-" + p.getIsolationLevel() + "'");
+            PreparedStatement prepare =
+                p.getConnection()
+                    .prepareStatement(
+                        "COMMIT PREPARED '"
+                            + transaction.getId()
+                            + "-"
+                            + p.getIsolationLevel()
+                            + "'");
             prepare.execute();
           } else if (p.getStatus() == TransactionStatus.ACTIVE) {
             PreparedStatement prepare = p.getConnection().prepareStatement("COMMIT");
@@ -108,13 +120,25 @@ public class TransactionManager {
       if (p.getConnection() != null) {
         try {
           if (p.getStatus() == TransactionStatus.PREPARED) {
-            PreparedStatement prepare = p.getConnection().prepareStatement("ROLLBACK PREPARED '" + transaction.getId() + "-" + p.getIsolationLevel() + "'");
+            PreparedStatement prepare =
+                p.getConnection()
+                    .prepareStatement(
+                        "ROLLBACK PREPARED '"
+                            + transaction.getId()
+                            + "-"
+                            + p.getIsolationLevel()
+                            + "'");
             prepare.execute();
-          } else if (p.getStatus() == TransactionStatus.PREPARE_FAILED || p.getStatus() == TransactionStatus.ACTIVE) {
+          } else if (p.getStatus() == TransactionStatus.PREPARE_FAILED
+              || p.getStatus() == TransactionStatus.ACTIVE) {
             PreparedStatement prepare = p.getConnection().prepareStatement("ROLLBACK");
             prepare.execute();
           } else {
-            logger.info("The transaction status is " + p.getStatus() + "; Validation status is " + p.getValidationStatus());
+            logger.info(
+                "The transaction status is "
+                    + p.getStatus()
+                    + "; Validation status is "
+                    + p.getValidationStatus());
           }
         } catch (SQLException ex) {
           results[p.getIsolationLevel()].setException(ex);
@@ -125,19 +149,17 @@ public class TransactionManager {
 
       p.doAfterRollback(transaction);
     }
-
-
   }
 
   public void addTransaction(Transaction txn) {
-    int hash = (int)(txn.getId() & (TRANSACTION_HASH_SIZE - 1));
+    int hash = (int) (txn.getId() & (TRANSACTION_HASH_SIZE - 1));
     activeTransactionLocks.get(hash).writeLock().lock();
     activeTransactionList.get(hash).add(txn);
     activeTransactionLocks.get(hash).writeLock().unlock();
   }
 
   public void removeTransaction(Transaction txn) {
-    int hash = (int)(txn.getId() & (TRANSACTION_HASH_SIZE - 1));
+    int hash = (int) (txn.getId() & (TRANSACTION_HASH_SIZE - 1));
     activeTransactionLocks.get(hash).writeLock().lock();
     Iterator<Transaction> iterator = activeTransactionList.get(hash).iterator();
     while (iterator.hasNext()) {
@@ -151,7 +173,7 @@ public class TransactionManager {
   }
 
   public Transaction getTransaction(long tid) {
-    int hash = (int)(tid & (TRANSACTION_HASH_SIZE - 1));
+    int hash = (int) (tid & (TRANSACTION_HASH_SIZE - 1));
     activeTransactionLocks.get(hash).readLock().lock();
     List<Transaction> txnList = activeTransactionList.get(hash);
     for (Transaction txn : txnList) {
@@ -177,8 +199,7 @@ public class TransactionManager {
     return minTid;
   }
 
-
-  static public TransactionManager getInstance() {
+  public static TransactionManager getInstance() {
     return INSTANCE;
   }
 }

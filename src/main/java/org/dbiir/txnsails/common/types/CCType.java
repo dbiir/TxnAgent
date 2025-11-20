@@ -1,10 +1,9 @@
 package org.dbiir.txnsails.common.types;
 
-import lombok.Getter;
-
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.Map;
+import lombok.Getter;
 
 @Getter
 public enum CCType {

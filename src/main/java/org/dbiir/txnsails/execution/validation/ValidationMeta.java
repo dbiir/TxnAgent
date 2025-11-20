@@ -91,18 +91,25 @@ public class ValidationMeta {
 
   public void validateFS(long tid) throws SQLException {
     // add validation lock
-    // System.out.println(Thread.currentThread().getName() + " tid #" + tid  + " try validation lock #" + key + " relation #" + relationName + " type: " + lockType);
-    ValidationMetaTable.getInstance().tryValidationLock(relationName, tid, idForValidation, lockType, CCType.NUM_CC);
+    // System.out.println(Thread.currentThread().getName() + " tid #" + tid  + " try validation lock
+    // #" + key + " relation #" + relationName + " type: " + lockType);
+    ValidationMetaTable.getInstance()
+        .tryValidationLock(relationName, tid, idForValidation, lockType, CCType.NUM_CC);
     if (lockType == LockType.EX) {
       return;
     }
     // validation
-    long lastestVersion = ValidationMetaTable.getInstance().getHotspotVersion(relationName, idForValidation);
+    long lastestVersion =
+        ValidationMetaTable.getInstance().getHotspotVersion(relationName, idForValidation);
     if (lastestVersion < 0) {
-      lastestVersion = ValidationMetaTable.getInstance().fetchUnknownVersionCache(relationName, idForValidation);
+      lastestVersion =
+          ValidationMetaTable.getInstance().fetchUnknownVersionCache(relationName, idForValidation);
     }
     if (lastestVersion != oldVersion) {
-      String msg = String.format("Validation failed for key #%d, %s, lastestVersion: %d, oldVersion: %d", idForValidation, relationName, lastestVersion, oldVersion);
+      String msg =
+          String.format(
+              "Validation failed for key #%d, %s, lastestVersion: %d, oldVersion: %d",
+              idForValidation, relationName, lastestVersion, oldVersion);
       logger.error(msg);
       throw new SQLException(msg, "500");
     }
@@ -110,15 +117,20 @@ public class ValidationMeta {
 
   public void doAfterCommit(long tid, boolean isCommit) {
     if (isCommit && lockType == LockType.EX) {
-      ValidationMetaTable.getInstance().updateHotspotVersion(relationName, idForValidation, oldVersion);
-      // System.out.println(Thread.currentThread().getName() + " update #" + key + " relation #" + relationName + " oldVersion: " + oldVersion);
+      ValidationMetaTable.getInstance()
+          .updateHotspotVersion(relationName, idForValidation, oldVersion);
+      // System.out.println(Thread.currentThread().getName() + " update #" + key + " relation #" +
+      // relationName + " oldVersion: " + oldVersion);
     }
-    ValidationMetaTable.getInstance().releaseValidationLock(relationName, idForValidation, lockType);
-    // System.out.println(Thread.currentThread().getName() + " release #" + key + " relation #" + relationName + " type: " + lockType);
+    ValidationMetaTable.getInstance()
+        .releaseValidationLock(relationName, idForValidation, lockType);
+    // System.out.println(Thread.currentThread().getName() + " release #" + key + " relation #" +
+    // relationName + " type: " + lockType);
   }
 
   public void releaseValidationLock(long tid) {
-    ValidationMetaTable.getInstance().releaseValidationLock(relationName, idForValidation, lockType);
+    ValidationMetaTable.getInstance()
+        .releaseValidationLock(relationName, idForValidation, lockType);
   }
 
   public void copy(ValidationMeta item) {

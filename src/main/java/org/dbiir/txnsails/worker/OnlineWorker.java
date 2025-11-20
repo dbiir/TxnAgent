@@ -94,15 +94,15 @@ public class OnlineWorker implements Runnable {
         Connection conn3 = makeConnection();
         conn3.setAutoCommit(true);
         conn3.setTransactionIsolation(Connection.TRANSACTION_SERIALIZABLE);
-        this.connections[2] = conn3;  // 2: SERIALIZABLE
+        this.connections[2] = conn3; // 2: SERIALIZABLE
       } else {
         this.conn = makeConnection();
         this.conn.setAutoCommit(false);
         switch (ccType) {
           case RC, RC_TAILOR -> this.conn.setTransactionIsolation(
-                  Connection.TRANSACTION_READ_COMMITTED);
+              Connection.TRANSACTION_READ_COMMITTED);
           case SI, SI_TAILOR -> this.conn.setTransactionIsolation(
-                  Connection.TRANSACTION_REPEATABLE_READ);
+              Connection.TRANSACTION_REPEATABLE_READ);
           case SER -> this.conn.setTransactionIsolation(Connection.TRANSACTION_SERIALIZABLE);
         }
       }
@@ -157,20 +157,17 @@ public class OnlineWorker implements Runnable {
   /**
    * online execution
    *
-   * @param args
-   *  - args[0]: transaction template name
-   *  - args[1]: sql index in this template
-   *  - args[2:]: the params for execution
-   *  - args[-1]: if exists, presents the lastest query
+   * @param args - args[0]: transaction template name - args[1]: sql index in this template -
+   *     args[2:]: the params for execution - args[-1]: if exists, presents the lastest query
    * @return execution results
    */
   public String executeFS(String[] args, int offset) throws SQLException {
     if (args.length < offset) return "";
     StringBuilder results = new StringBuilder();
     TemplateSQL templateSQL =
-            this.templates
-                    .get(args[offset - 2])
-                    .getSQLTemplateByIndex(Integer.parseInt(args[offset - 1]));
+        this.templates
+            .get(args[offset - 2])
+            .getSQLTemplateByIndex(Integer.parseInt(args[offset - 1]));
 
     // record the sql that need validate
     ValidationMeta meta = this.validationMetaFS[validationMetaFSIdx++];
@@ -178,18 +175,18 @@ public class OnlineWorker implements Runnable {
     if (templateSQL.getUniqueKeyNumber() <= args.length - offset) {
       lastestSQL = meta.addRuntimeArgs(List.of(args), offset);
       System.out.println(
-              this.toString()
-                      + templateSQL.getSQL()
-                      + ", "
-                      + Arrays.asList(args).subList(offset, args.length)
-                      + ", Id for validation: "
-                      + meta.getIdForValidation());
+          this.toString()
+              + templateSQL.getSQL()
+              + ", "
+              + Arrays.asList(args).subList(offset, args.length)
+              + ", Id for validation: "
+              + meta.getIdForValidation());
       // TODO: sampling
       if (shouldSample) {
         addSampleMeta(
-                templateSQL.getOp(),
-                MetaWorker.getINSTANCE().getRelationType(templateSQL.getTable()),
-                meta.getIdForValidation());
+            templateSQL.getOp(),
+            MetaWorker.getINSTANCE().getRelationType(templateSQL.getTable()),
+            meta.getIdForValidation());
       }
     } else {
       System.out.println("The number of real time args is not enough.");
@@ -211,7 +208,7 @@ public class OnlineWorker implements Runnable {
 
     // execute the sql
     try (PreparedStatement stmtc =
-                 this.getPreparedStatement(conn, new SQLStmt(executeSQL), args, offset, templateSQL)) {
+        this.getPreparedStatement(conn, new SQLStmt(executeSQL), args, offset, templateSQL)) {
       stmtc.setQueryTimeout(1);
 
       try (ResultSet rs = firstUse ? omitBeginStatement(stmtc) : stmtc.executeQuery()) {
@@ -233,7 +230,7 @@ public class OnlineWorker implements Runnable {
         results.append(wrapResults(rows));
 
         // record the version if it needs, support scan-based
-        validationMetaUnderRC[validationMetaFSIdx - 1].setOldVersion(v);
+        validationMetaFS[validationMetaFSIdx - 1].setOldVersion(v);
         logger.info("{} {} execute finished", this.toString(), executeSQL);
       } catch (SQLException ex) {
         // check if the error can retry automatically, in the future
@@ -404,10 +401,13 @@ public class OnlineWorker implements Runnable {
     }
     // 2. commit or rollback a transaction
     TransactionManager.getInstance().commit(this.transaction, this.resultList);
-    for (AsyncResultWrapper result: this.resultList) {
+    for (AsyncResultWrapper result : this.resultList) {
       if (!result.isSuccess()) {
-        logger.error("{} transaction #{} commit failed after preparation, {}",
-                Thread.currentThread().getName(), this.transaction.getId(), result.getException().getMessage());
+        logger.error(
+            "{} transaction #{} commit failed after preparation, {}",
+            Thread.currentThread().getName(),
+            this.transaction.getId(),
+            result.getException().getMessage());
       }
     }
 
@@ -439,10 +439,13 @@ public class OnlineWorker implements Runnable {
   public void rollbackFS() throws SQLException {
     assert !this.transaction.isPrepared();
     TransactionManager.getInstance().rollback(this.transaction, this.resultList);
-    for (AsyncResultWrapper result: this.resultList) {
+    for (AsyncResultWrapper result : this.resultList) {
       if (!result.isSuccess()) {
-        logger.error("{} transaction #{} rollback failed, {}",
-                Thread.currentThread().getName(), this.transaction.getId(), result.getException().getMessage());
+        logger.error(
+            "{} transaction #{} rollback failed, {}",
+            Thread.currentThread().getName(),
+            this.transaction.getId(),
+            result.getException().getMessage());
         // reset the connection for this participant
       }
     }
@@ -850,7 +853,10 @@ public class OnlineWorker implements Runnable {
           }
         } catch (SQLException ex) {
           this.transaction.setPrepared(false);
-          logger.error("{} failed to prepare transaction: {}", Thread.currentThread().getName(), ex.getMessage());
+          logger.error(
+              "{} failed to prepare transaction: {}",
+              Thread.currentThread().getName(),
+              ex.getMessage());
         }
       }
     }

@@ -1,10 +1,9 @@
 package org.dbiir.txnsails.common;
 
+import java.sql.Connection;
 import lombok.Getter;
 import lombok.Setter;
 import org.dbiir.txnsails.common.types.IsolationLevelType;
-
-import java.sql.Connection;
 
 @Getter
 public class AsyncResultWrapper {
@@ -12,7 +11,8 @@ public class AsyncResultWrapper {
   private IsolationLevelType isolationLevel;
   @Setter private Exception exception;
 
-  public AsyncResultWrapper(Connection connection, IsolationLevelType isolationLevelType, Exception exception) {
+  public AsyncResultWrapper(
+      Connection connection, IsolationLevelType isolationLevelType, Exception exception) {
     this.connection = connection;
     this.isolationLevel = isolationLevelType;
     this.exception = exception;
@@ -32,4 +32,3 @@ public class AsyncResultWrapper {
     this.exception = null;
   }
 }
-

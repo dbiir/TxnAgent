@@ -10,9 +10,11 @@ public enum ContentionLevel {
   HIGH("HIGH");
 
   private final String level;
+
   ContentionLevel(String level) {
     this.level = level;
   }
+
   static final Map<Integer, ContentionLevel> idx_lookup = new HashMap<>();
   static final Map<String, ContentionLevel> name_lookup = new HashMap<>();
 

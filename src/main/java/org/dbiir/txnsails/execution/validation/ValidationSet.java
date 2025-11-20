@@ -1,18 +1,16 @@
 package org.dbiir.txnsails.execution.validation;
 
+import java.util.ArrayList;
+import java.util.List;
 import lombok.Getter;
 import org.dbiir.txnsails.common.types.LockType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
-import java.util.List;
-
 public class ValidationSet {
-  static private Logger logger = LoggerFactory.getLogger(ValidationSet.class);
+  private static Logger logger = LoggerFactory.getLogger(ValidationSet.class);
   private final List<ValidationMeta> items;
-  @Getter
-  private int itemCount;
+  @Getter private int itemCount;
 
   public ValidationSet(int capacity) {
     this.items = new ArrayList<>(capacity);
@@ -23,7 +21,7 @@ public class ValidationSet {
   }
 
   public void addValidationMetas(List<ValidationMeta> validationItems) {
-    for (ValidationMeta item: validationItems) {
+    for (ValidationMeta item : validationItems) {
       this.items.get(itemCount).copy(item);
       this.itemCount++;
     }
