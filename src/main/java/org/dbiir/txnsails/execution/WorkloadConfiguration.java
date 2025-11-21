@@ -23,7 +23,6 @@ import lombok.Setter;
 import org.dbiir.txnsails.common.JacksonXmlConfiguration;
 import org.dbiir.txnsails.common.types.CCType;
 import org.dbiir.txnsails.common.types.DatabaseType;
-import org.dbiir.txnsails.worker.Adapter;
 
 public class WorkloadConfiguration {
 
@@ -81,7 +80,6 @@ public class WorkloadConfiguration {
         break;
       case "DYNAMIC":
         this.concurrencyControlType = CCType.DYNAMIC;
-        Adapter.getInstance().setUsed(true);
         break;
       case "RC":
         this.concurrencyControlType = CCType.RC;

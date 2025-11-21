@@ -10,8 +10,11 @@ import lombok.Setter;
 import lombok.SneakyThrows;
 import org.dbiir.txnsails.common.types.CCType;
 import org.dbiir.txnsails.execution.validation.TransactionCollector;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class Flusher implements Runnable {
+  private static final Logger logger = LoggerFactory.getLogger(Flusher.class);
   private static final String ip = "localhost";
   private static final int port = 7654;
   private static final CCType[] types =
@@ -22,7 +25,6 @@ public class Flusher implements Runnable {
   private final CCType ccType;
   private final boolean online;
   private final Socket socket;
-  private boolean use = false;
 
   public Flusher(String workload, String prefix, CCType ccType, boolean online) {
     try {
@@ -30,9 +32,8 @@ public class Flusher implements Runnable {
       this.outputFilePrefix = prefix;
       this.ccType = ccType;
       this.online = online;
-      if (use && online) this.socket = new Socket(ip, port);
-      else this.socket = new Socket();
-      System.out.println(socket.getInetAddress() + ":" + socket.getPort());
+      this.socket = new Socket(ip, port);
+      logger.info("{}:{}", socket.getInetAddress(), socket.getPort());
     } catch (IOException e) {
       throw new RuntimeException(e);
     }
@@ -48,6 +49,10 @@ public class Flusher implements Runnable {
   @SneakyThrows
   @Override
   public void run() {
+    if (needFlush(ccType)) {
+      logger.info("Close the flusher thread for cc type: {}", ccType);
+      return;
+    }
     long start_ts = System.currentTimeMillis();
     boolean a = false, b = false, c = false;
     while (!Thread.currentThread().isInterrupted()) {
@@ -81,14 +86,13 @@ public class Flusher implements Runnable {
         }
 
         TransactionCollector.getInstance().refreshMetas();
-        if (online && use) {
+        if (online) {
           PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
           BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
           out.println("online,predict," + fileName);
           System.out.println("Send the request to the server: " + "online,predict," + fileName);
           String data = in.readLine();
           System.out.println("Receive the prediction result: " + data);
-          // TODO: change the
           // Adapter.getInstance().setNextCCType(data);
         }
         System.out.println("Flush time cost: " + (System.currentTimeMillis() - timestamp) + " ms");
