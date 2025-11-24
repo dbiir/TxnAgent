@@ -4,10 +4,13 @@ import java.sql.Connection;
 import lombok.Getter;
 import lombok.Setter;
 import org.dbiir.txnsails.common.types.IsolationLevelType;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Getter
 public class AsyncResultWrapper {
-  private Connection connection;
+  private static final Logger logger = LoggerFactory.getLogger(AsyncResultWrapper.class);
+  @Setter private Connection connection;
   private IsolationLevelType isolationLevel;
   @Setter private Exception exception;
 
@@ -21,6 +24,25 @@ public class AsyncResultWrapper {
   public AsyncResultWrapper(Connection connection, IsolationLevelType isolationLevelType) {
     this.connection = connection;
     this.isolationLevel = isolationLevelType;
+    this.exception = null;
+  }
+
+  public AsyncResultWrapper(Connection connection, int isolationLevelType) {
+    this.connection = connection;
+    switch (isolationLevelType) {
+      case 0 -> {
+        this.isolationLevel = IsolationLevelType.SER;
+      }
+      case 1 -> {
+        this.isolationLevel = IsolationLevelType.SI;
+      }
+      case 2 -> {
+        this.isolationLevel = IsolationLevelType.RC;
+      }
+      default -> {
+        logger.error("");
+      }
+    }
     this.exception = null;
   }
 

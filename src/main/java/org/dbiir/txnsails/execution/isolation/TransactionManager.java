@@ -53,6 +53,7 @@ public class TransactionManager {
 
   public void prepare(Transaction transaction) throws SQLException {
     boolean hybridTransaction = transaction.getParticipants().size() > 1;
+
     for (Participant p : transaction.getParticipants()) {
       p.validate(transaction);
       p.setValidationStatus(ValidationStatus.VALIDATED);
@@ -75,7 +76,6 @@ public class TransactionManager {
         }
       }
     }
-    transaction.setStatus(TransactionStatus.PREPARED);
   }
 
   public void commit(Transaction transaction, AsyncResultWrapper[] results) {

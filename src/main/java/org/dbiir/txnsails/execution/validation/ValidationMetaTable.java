@@ -18,7 +18,7 @@ public class ValidationMetaTable {
   private static final ValidationMetaTable INSTANCE;
   private int LOAD_THREAD = 16;
   // another lock strategy in middle-tier concurrency under RC (unused)
-  private final HashMap<String, LinkedList<ValidationLock>[]> validationLocks;
+  private final HashMap<String, ArrayList<LinkedList<ValidationLock>>> validationLocks;
   private final HashMap<String, ReentrantReadWriteLock[]> validationBucketLocks;
   private final long lockWaitTimeout = 10;
   private final int maxRetry = 5;
@@ -42,7 +42,7 @@ public class ValidationMetaTable {
     for (int i = 0; i < connections.size(); i++) {
       connectionGuards.add(new ReentrantLock());
     }
-
+    long startTime = System.currentTimeMillis();
     ExecutorService executor = Executors.newFixedThreadPool(LOAD_THREAD);
     switch (workload) {
       case "smallbank" -> {
@@ -62,7 +62,7 @@ public class ValidationMetaTable {
                       j < SmallBankConstants.getHashSize(relationName);
                       j += LOAD_THREAD) {
                     try {
-                      if (!validationLocks.get(relationName)[j].isEmpty()) {
+                      if (!validationLocks.get(relationName).get(j).isEmpty()) {
                         int latestVersion =
                             fetchLatestVersion(
                                 connections.get(index),
@@ -92,7 +92,7 @@ public class ValidationMetaTable {
                       j < YCSBConstants.getHashSize(relationName);
                       j += LOAD_THREAD) {
                     try {
-                      if (!validationLocks.get(relationName)[j].isEmpty()) {
+                      if (!validationLocks.get(relationName).get(j).isEmpty()) {
                         int latestVersion =
                             fetchLatestVersion(
                                 connections.get(index),
@@ -122,7 +122,7 @@ public class ValidationMetaTable {
                       j < TPCCConstants.getHashSize(relationName);
                       j += LOAD_THREAD) {
                     try {
-                      if (!validationLocks.get(relationName)[j].isEmpty()) {
+                      if (!validationLocks.get(relationName).get(j).isEmpty()) {
                         int latestVersion =
                             fetchLatestVersion(
                                 connections.get(index),
@@ -139,6 +139,14 @@ public class ValidationMetaTable {
       }
     }
     executor.shutdown();
+    while (!executor.isTerminated()) {
+      try {
+        Thread.sleep(1000);
+      } catch (InterruptedException e) {
+        e.printStackTrace();
+      }
+    }
+    System.out.println("Init hotspot version time: " + (System.currentTimeMillis() - startTime));
   }
 
   private int getHashSizeByRelationName(String relationName) {
@@ -164,11 +172,11 @@ public class ValidationMetaTable {
   }
 
   private void createLockTable(String relationName, int bucketSize) {
-    validationLocks.put(relationName, new LinkedList[bucketSize]);
+    validationLocks.put(relationName, new ArrayList<>(bucketSize));
     validationBucketLocks.put(relationName, new ReentrantReadWriteLock[bucketSize]);
     for (int i = 0; i < bucketSize; i++) {
-      validationLocks.get(relationName)[i] = new LinkedList<>();
-      validationLocks.get(relationName)[i].add(new ValidationLock(i));
+      validationLocks.get(relationName).add(new LinkedList<>());
+      validationLocks.get(relationName).get(i).add(new ValidationLock(i));
       validationBucketLocks.get(relationName)[i] = new ReentrantReadWriteLock();
     }
   }
@@ -183,7 +191,7 @@ public class ValidationMetaTable {
          * before fetching the latest version.
          */
         bucketNum = key % YCSBConstants.getHashSize(tableName);
-        if (!validationLocks.get(tableName)[bucketNum].isEmpty()) {
+        if (!validationLocks.get(tableName).get(bucketNum).isEmpty()) {
           connectionGuards.get(key % LOAD_THREAD).lock();
           try {
             result =
@@ -198,7 +206,7 @@ public class ValidationMetaTable {
       }
       case "smallbank" -> {
         bucketNum = key % SmallBankConstants.getHashSize(tableName);
-        if (!validationLocks.get(tableName)[bucketNum].isEmpty()) {
+        if (!validationLocks.get(tableName).get(bucketNum).isEmpty()) {
           connectionGuards.get(key % LOAD_THREAD).lock();
           try {
             result =
@@ -214,7 +222,7 @@ public class ValidationMetaTable {
       case "tpcc" -> {
         // implement hot version cache in tpc-c
         bucketNum = key % TPCCConstants.getHashSize(tableName);
-        if (!validationLocks.get(tableName)[bucketNum].isEmpty()) {
+        if (!validationLocks.get(tableName).get(bucketNum).isEmpty()) {
           connectionGuards.get(key % LOAD_THREAD).lock();
           try {
             result =
@@ -269,7 +277,7 @@ public class ValidationMetaTable {
     }
     int bucketNum = (int) (key % getHashSizeByRelationName(table));
     validationBucketLocks.get(table)[bucketNum].readLock().lock();
-    List<ValidationLock> lockList = validationLocks.get(table)[bucketNum];
+    List<ValidationLock> lockList = validationLocks.get(table).get(bucketNum);
     for (ValidationLock lock : lockList) {
       if (lock.getId() == key) {
         lock.releaseLock(type);
@@ -295,7 +303,7 @@ public class ValidationMetaTable {
     int bucketNum = (int) (key % getHashSizeByRelationName(table));
     long currentTime = System.currentTimeMillis();
     validationBucketLocks.get(table)[bucketNum].readLock().lock();
-    List<ValidationLock> lockList = validationLocks.get(table)[bucketNum];
+    List<ValidationLock> lockList = validationLocks.get(table).get(bucketNum);
     for (ValidationLock lock : lockList) {
       if (lock.getId() == key) {
         int res = 0;
@@ -343,7 +351,7 @@ public class ValidationMetaTable {
       String table, long tid, long key, LockType type, CCType ccType) throws SQLException {
     int bucketNum = (int) (key % getHashSizeByRelationName(table));
     validationBucketLocks.get(table)[bucketNum].writeLock().lock();
-    List<ValidationLock> lockList = validationLocks.get(table)[bucketNum];
+    List<ValidationLock> lockList = validationLocks.get(table).get(bucketNum);
     for (ValidationLock lock : lockList) {
       if (lock.getId() == key) {
         int res;
@@ -369,7 +377,7 @@ public class ValidationMetaTable {
       }
     }
     ValidationLock newLock = new ValidationLock(key);
-    validationLocks.get(table)[bucketNum].add(newLock);
+    validationLocks.get(table).get(bucketNum).add(newLock);
     newLock.tryLock(tid, type, ccType);
     validationBucketLocks.get(table)[bucketNum].writeLock().unlock();
   }
@@ -377,7 +385,7 @@ public class ValidationMetaTable {
   public void updateHotspotVersion(String table, long key, long tid) {
     int bucketNum = (int) (key % getHashSizeByRelationName(table));
     validationBucketLocks.get(table)[bucketNum].readLock().lock();
-    for (ValidationLock lock : validationLocks.get(table)[bucketNum]) {
+    for (ValidationLock lock : validationLocks.get(table).get(bucketNum)) {
       if (lock.getId() == key) {
         lock.updateVersion(tid);
         break;
@@ -393,7 +401,7 @@ public class ValidationMetaTable {
     }
     int bucketNum = (int) (key % getHashSizeByRelationName(table));
     validationBucketLocks.get(table)[bucketNum].readLock().lock();
-    for (ValidationLock lock : validationLocks.get(table)[bucketNum]) {
+    for (ValidationLock lock : validationLocks.get(table).get(bucketNum)) {
       if (lock.getId() == key) {
         validationBucketLocks.get(table)[bucketNum].readLock().unlock();
         return lock.getVersion();

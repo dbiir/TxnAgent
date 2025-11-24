@@ -32,8 +32,12 @@ public class Flusher implements Runnable {
       this.outputFilePrefix = prefix;
       this.ccType = ccType;
       this.online = online;
-      this.socket = new Socket(ip, port);
-      logger.info("{}:{}", socket.getInetAddress(), socket.getPort());
+      if (needFlush(this.ccType)) {
+        this.socket = new Socket(ip, port);
+        logger.info("{}:{}", socket.getInetAddress(), socket.getPort());
+      } else {
+        this.socket = null;
+      }
     } catch (IOException e) {
       throw new RuntimeException(e);
     }
@@ -49,7 +53,7 @@ public class Flusher implements Runnable {
   @SneakyThrows
   @Override
   public void run() {
-    if (needFlush(ccType)) {
+    if (!needFlush(ccType)) {
       logger.info("Close the flusher thread for cc type: {}", ccType);
       return;
     }
@@ -90,9 +94,9 @@ public class Flusher implements Runnable {
           PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
           BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
           out.println("online,predict," + fileName);
-          System.out.println("Send the request to the server: " + "online,predict," + fileName);
+          logger.debug("Send the request to the server: online,predict,{}", fileName);
           String data = in.readLine();
-          System.out.println("Receive the prediction result: " + data);
+          logger.debug("Receive the prediction result: {}", data);
           // Adapter.getInstance().setNextCCType(data);
         }
         System.out.println("Flush time cost: " + (System.currentTimeMillis() - timestamp) + " ms");

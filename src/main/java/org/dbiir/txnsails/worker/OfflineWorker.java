@@ -37,16 +37,16 @@ public class OfflineWorker {
             + args[3]
             + "\tlength:"
             + args.length);
-    if (args[1].equalsIgnoreCase("1") || args[1].equalsIgnoreCase("write")) {
-      if (args.length == 5)
+    if (args[2].equalsIgnoreCase("1") || args[2].equalsIgnoreCase("write")) {
+      if (args.length == 6)
         return MetaWorker.getINSTANCE()
-            .registerTemplateSQL(args[0], 1, args[2], args[3], Integer.parseInt(args[4]));
-      else return MetaWorker.getINSTANCE().registerTemplateSQL(args[0], 1, args[2], args[3]);
+            .registerTemplateSQL(args[1], 1, args[3], args[4], Integer.parseInt(args[4]));
+      else return MetaWorker.getINSTANCE().registerTemplateSQL(args[1], 1, args[3], args[4]);
     } else {
-      if (args.length == 5)
+      if (args.length == 6)
         return MetaWorker.getINSTANCE()
-            .registerTemplateSQL(args[0], 0, args[2], args[3], Integer.parseInt(args[4]));
-      else return MetaWorker.getINSTANCE().registerTemplateSQL(args[0], 0, args[2], args[3]);
+            .registerTemplateSQL(args[1], 0, args[3], args[4], Integer.parseInt(args[5]));
+      else return MetaWorker.getINSTANCE().registerTemplateSQL(args[1], 0, args[3], args[4]);
     }
   }
 

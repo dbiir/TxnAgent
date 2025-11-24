@@ -74,7 +74,7 @@ public class ValidationMeta {
     }
 
     // Optimization for local 2PC
-    return args.size() - offset > whereConditionInfos.size();
+    return args.size() - offset > templateSQL.getAllPlaceholders().size();
   }
 
   public void clearInfo() {

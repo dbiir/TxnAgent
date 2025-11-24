@@ -91,6 +91,8 @@ public class Participant {
       int itemCount = participant.getWriteSet().getItemCount();
       for (int i = 0; i < itemCount; i++) {
         DataItem dataItem = participant.getWriteSet().get(i).getDataItem();
+        dataItem.installVersion(
+            participant.getWriteSet().get(i).getOldVersion(), transaction.getCommitTimestamp());
         dataItem.setMaxReadTimestamp(transaction.getCommitTimestamp());
         dataItem.releaseWriteLock(transaction.getId());
       }
@@ -122,8 +124,13 @@ public class Participant {
   }
 
   private void adjustTimestamp(Transaction t_i, DataItem dataItem) {
+    logger.debug("adjustTimestamp: t_i={}, dataItem={}", t_i.getId(), dataItem.getKey());
     dataItem.acquireReadLock();
     for (Transaction t_j : dataItem.getReadTransactions()) {
+      logger.debug("adjustTimestamp: t_j={}", t_j.getId());
+      //      if (t_j.getId() == t_i.getId()) {
+      //        continue;
+      //      }
       // add spinlock to concurrent transaction
       if (t_i.getId() < t_j.getId()) {
         t_i.spinLock();

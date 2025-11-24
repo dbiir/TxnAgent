@@ -4,8 +4,8 @@
     <!-- Connection details -->
     <type>POSTGRES</type>
     <driver>org.postgresql.Driver</driver>
-    <url>jdbc:postgresql://localhost:5432/osprey?sslmode=disable&amp;ApplicationName=smallbank&amp;reWriteBatchedInserts=true</url>
-    <username>postgres</username>
+    <url>jdbc:postgresql://localhost:5432/ycsb?sslmode=disable&amp;ApplicationName=smallbank&amp;reWriteBatchedInserts=true</url>
+    <username>zqy</username>
     <password>Ss123!@#</password>
     <reconnectOnConnectionFailure>true</reconnectOnConnectionFailure>
     <isolation>TRANSACTION_SERIALIZABLE</isolation>
@@ -16,7 +16,7 @@
     SI_FOR_UPDATE, RC_FOR_UPDATE,
     SI_TAILOR, RC_TAILOR, RC_TAILOR_LOCK, DYNAMIC
     -->
-    <concurrencyControlType>DYNAMIC</concurrencyControlType>
+    <concurrencyControlType>FS</concurrencyControlType>
     <!--  ycsb, smallbank, tpcc  -->
-    <benchmark>ycsb</benchmark>
+    <benchmark>tpcc</benchmark>
 </parameters>

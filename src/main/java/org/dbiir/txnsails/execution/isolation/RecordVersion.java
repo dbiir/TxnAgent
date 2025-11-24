@@ -1,3 +1,3 @@
 package org.dbiir.txnsails.execution.isolation;
 
-public record RecordVersion(int version, long timestamp) {}
+public record RecordVersion(long version, long timestamp) {}

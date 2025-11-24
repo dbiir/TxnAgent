@@ -33,12 +33,11 @@ public class PartitionManager {
     this.tableToDataItems = new HashMap<>();
     this.tableToDataItemGuards = new HashMap<>();
     // create the statistic thread
-    this.stasticThread = new Thread(new StasticThread());
-    this.stasticThread.start();
+    //    this.stasticThread = new Thread(new StasticThread());
+    //    this.stasticThread.start();
   }
 
   public void init(String workload) {
-    // TODO:
     this.workload = workload;
     switch (workload) {
       case "ycsb":
@@ -78,32 +77,17 @@ public class PartitionManager {
     }
   }
 
+  /*
+   * @return isolation level: `0-serializable`, 1-`snapshot isolation`; `2-read committed`
+   */
   public int chooseIsolation(ValidationMeta validationMeta) {
-    return 0;
-  }
-
-  public DataItem getDataItem(ValidationMeta validationMeta) {
-    int bucketNum =
-        (int)
-            (validationMeta.getIdForValidation()
-                % getHashSizeByRelationName(validationMeta.getRelationName()));
-    ReadWriteLock lock = tableToDataItemGuards.get(validationMeta.getRelationName()).get(bucketNum);
-    lock.readLock().lock();
-    for (DataItem item : tableToDataItems.get((validationMeta.getRelationName())).get(bucketNum)) {
-      if (item.getKey() == validationMeta.getIdForValidation()) {
-        lock.readLock().unlock();
-        return item;
-      }
-    }
-    lock.readLock().unlock();
-    return null;
+    return 1;
   }
 
   public DataItem getAndAddDataItem(ValidationMeta validationMeta) {
     int bucketNum =
-        (int)
-            (validationMeta.getIdForValidation()
-                % getHashSizeByRelationName(validationMeta.getRelationName()));
+        validationMeta.getIdForValidation()
+            % getHashSizeByRelationName(validationMeta.getRelationName());
     ReadWriteLock lock = tableToDataItemGuards.get(validationMeta.getRelationName()).get(bucketNum);
     lock.readLock().lock();
     for (DataItem item : tableToDataItems.get((validationMeta.getRelationName())).get(bucketNum)) {

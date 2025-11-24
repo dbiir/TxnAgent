@@ -8,8 +8,8 @@ import lombok.Getter;
 @Getter
 public enum IsolationLevelType {
   SER("SERIALIZABLE"),
-  RC("RC"),
   SI("SI"),
+  RC("RC"),
   NUM_CC("NUM_CC");
   private final String name;
 

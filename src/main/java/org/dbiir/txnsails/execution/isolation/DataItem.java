@@ -7,9 +7,12 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import lombok.Getter;
 import lombok.Setter;
 import org.dbiir.txnsails.execution.validation.ValidationMeta;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 // not thread-safe
 public class DataItem {
+  private static final Logger logger = LoggerFactory.getLogger(DataItem.class);
   private static final int LEASE_TIME = 10000; // milliseconds
   @Getter @Setter private int key;
   @Getter private int readCount;
@@ -47,6 +50,7 @@ public class DataItem {
   }
 
   public void read(Transaction transaction, long version) {
+    logger.debug("data item {}, read transaction {}", key, transaction.getId());
     this.lock.writeLock().lock();
     this.readTransactions.add(transaction);
     this.lock.writeLock().unlock();
@@ -63,6 +67,7 @@ public class DataItem {
   }
 
   public void write(Transaction transaction) {
+    logger.debug("data item {}, write transaction {}", key, transaction.getId());
     this.writeCount++;
     this.lease = System.currentTimeMillis() + LEASE_TIME;
   }
@@ -107,7 +112,7 @@ public class DataItem {
         && this.writeTransaction.get() == 0;
   }
 
-  public void installVersion(int version, long commitTimestamp) {
+  public void installVersion(long version, long commitTimestamp) {
     this.versions.add(new RecordVersion(version, commitTimestamp));
   }
 
