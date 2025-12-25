@@ -23,7 +23,7 @@ public class TransactionManager {
   private String workload;
   // active transaction list
   private final List<List<Transaction>> activeTransactionList =
-      new ArrayList<>(TRANSACTION_HASH_SIZE);
+          new ArrayList<>(TRANSACTION_HASH_SIZE);
   private final List<ReadWriteLock> activeTransactionLocks = new ArrayList<>(TRANSACTION_HASH_SIZE);
 
   // data item metadata, including hot, medium, low contention items
@@ -55,19 +55,19 @@ public class TransactionManager {
     boolean hybridTransaction = transaction.getParticipants().size() > 1;
 
     for (Participant p : transaction.getParticipants()) {
-      p.validate(transaction);
+      //      p.validate(transaction);
       p.setValidationStatus(ValidationStatus.VALIDATED);
 
       // serial execution
       if (hybridTransaction) {
         try (PreparedStatement prepare =
-            p.getConnection()
-                .prepareStatement(
-                    "PREPARE TRANSACTION '"
-                        + transaction.getId()
-                        + "-"
-                        + p.getIsolationLevel()
-                        + "'"); ) {
+                     p.getConnection()
+                             .prepareStatement(
+                                     "PREPARE TRANSACTION '"
+                                             + transaction.getId()
+                                             + "-"
+                                             + p.getIsolationLevel()
+                                             + "'"); ) {
           prepare.execute();
           p.setStatus(TransactionStatus.PREPARED);
         } catch (SQLException ex) {
@@ -82,22 +82,22 @@ public class TransactionManager {
     for (Participant p : transaction.getParticipants()) {
       if (p.getValidationStatus() != ValidationStatus.VALIDATED) {
         logger.error(
-            Thread.currentThread().getName()
-                + " The transaction is not validated !!!"
-                + p.getValidationStatus());
+                Thread.currentThread().getName()
+                        + " The transaction is not validated !!!"
+                        + p.getValidationStatus());
         return;
       }
       if (p.getConnection() != null) {
         try {
           if (p.getStatus() == TransactionStatus.PREPARED) {
             PreparedStatement prepare =
-                p.getConnection()
-                    .prepareStatement(
-                        "COMMIT PREPARED '"
-                            + transaction.getId()
-                            + "-"
-                            + p.getIsolationLevel()
-                            + "'");
+                    p.getConnection()
+                            .prepareStatement(
+                                    "COMMIT PREPARED '"
+                                            + transaction.getId()
+                                            + "-"
+                                            + p.getIsolationLevel()
+                                            + "'");
             prepare.execute();
           } else if (p.getStatus() == TransactionStatus.ACTIVE) {
             PreparedStatement prepare = p.getConnection().prepareStatement("COMMIT");
@@ -111,7 +111,7 @@ public class TransactionManager {
         logger.error("Cannot find the connection");
       }
 
-      p.doAfterCommit(transaction);
+      //      p.doAfterCommit(transaction);
     }
   }
 
@@ -121,25 +121,25 @@ public class TransactionManager {
         try {
           if (p.getStatus() == TransactionStatus.PREPARED) {
             PreparedStatement prepare =
-                p.getConnection()
-                    .prepareStatement(
-                        "ROLLBACK PREPARED '"
-                            + transaction.getId()
-                            + "-"
-                            + p.getIsolationLevel()
-                            + "'");
+                    p.getConnection()
+                            .prepareStatement(
+                                    "ROLLBACK PREPARED '"
+                                            + transaction.getId()
+                                            + "-"
+                                            + p.getIsolationLevel()
+                                            + "'");
             prepare.execute();
           } else if (p.getStatus() == TransactionStatus.PREPARE_FAILED
-              || p.getStatus() == TransactionStatus.ACTIVE) {
+                  || p.getStatus() == TransactionStatus.ACTIVE) {
             PreparedStatement prepare = p.getConnection().prepareStatement("ROLLBACK");
             prepare.execute();
           } else {
-            logger.info(
-                "The transaction status is "
-                    + p.getStatus()
-                    + "; Validation status is "
-                    + p.getValidationStatus());
+            logger.error(
+                    "The transaction status is {}; Validation status is {}",
+                    p.getStatus(),
+                    p.getValidationStatus());
           }
+          results[p.getIsolationLevel()].setException(null);
         } catch (SQLException ex) {
           results[p.getIsolationLevel()].setException(ex);
         }
@@ -147,7 +147,7 @@ public class TransactionManager {
         logger.error("Cannot find the connection");
       }
 
-      p.doAfterRollback(transaction);
+      //      p.doAfterRollback(transaction);
     }
   }
 

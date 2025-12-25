@@ -56,27 +56,33 @@ public class Participant {
     for (int validationPhase = 0; validationPhase < itemCount; validationPhase++) {
       // do timestamp adjustment
       DataItem dataItem = writeSet.get(validationPhase).getDataItem();
-      if (!dataItem.addVirtualWriteLock(transaction.getId())) {
-        String msg =
-            "Transaction "
-                + transaction.getId()
-                + " failed to add virtual write lock for item, awful update !!!";
-        logger.warn(msg);
-        validationStatus = ValidationStatus.FAILED;
-        throw new SQLException(msg, "500");
-      }
+      //      int retryCount = 0;
+      //      while (!dataItem.addVirtualWriteLock(transaction.getId())) {
+      //        retryCount++;
+      //        if (retryCount >= 10) {
+      //          String msg =
+      //                  "Transaction "
+      //                          + transaction.getId()
+      //                          + " failed to add virtual write lock for item, awful update !!!";
+      //          logger.warn(msg);
+      //          validationStatus = ValidationStatus.FAILED;
+      //          throw new SQLException(msg, "500");
+      //        } else {
+      //          Thread.yield();
+      //        }
+      //      }
 
       adjustTimestamp(transaction, dataItem);
       transaction.spinLock();
       transaction.setLowerBound(
-          Math.max(transaction.getLowerBound(), dataItem.getMaxReadTimestamp() + 1));
+              Math.max(transaction.getLowerBound(), dataItem.getMaxReadTimestamp() + 1));
       transaction.spinUnlock();
 
       if (transaction.getLowerBound() > transaction.getUpperBound()) {
         String msg =
-            "Transaction "
-                + transaction.getId()
-                + " failed in validation phase for write set, LB > UB !!!";
+                "Transaction "
+                        + transaction.getId()
+                        + " failed in validation phase for write set, LB > UB !!!";
         logger.warn(msg);
         validationStatus = ValidationStatus.FAILED;
         throw new SQLException(msg, "500");
@@ -92,7 +98,7 @@ public class Participant {
       for (int i = 0; i < itemCount; i++) {
         DataItem dataItem = participant.getWriteSet().get(i).getDataItem();
         dataItem.installVersion(
-            participant.getWriteSet().get(i).getOldVersion(), transaction.getCommitTimestamp());
+                participant.getWriteSet().get(i).getOldVersion(), transaction.getCommitTimestamp());
         dataItem.setMaxReadTimestamp(transaction.getCommitTimestamp());
         dataItem.releaseWriteLock(transaction.getId());
       }
@@ -113,6 +119,7 @@ public class Participant {
       for (int i = 0; i < itemCount; i++) {
         DataItem dataItem = participant.getWriteSet().get(i).getDataItem();
         dataItem.setMaxReadTimestamp(transaction.getCommitTimestamp());
+        dataItem.releaseWriteLock(transaction.getId());
       }
       // read set
       itemCount = participant.getReadSet().getItemCount();
@@ -150,9 +157,9 @@ public class Participant {
 
       if (t_i.getLowerBound() < t_j.getLowerBound()) {
         t_i.setLowerBound(
-            t_j.getLowerBound() + ConcurrencyControlAgent.getInstance().getMu(t_i, t_j));
+                t_j.getLowerBound() + ConcurrencyControlAgent.getInstance().getMu(t_i, t_j));
       }
-      t_j.setLowerBound(Math.min(t_j.getUpperBound(), t_i.getLowerBound() - 1));
+      t_j.setUpperBound(Math.min(t_j.getUpperBound(), t_i.getLowerBound() - 1));
 
       // release spinlock
       t_i.spinUnlock();

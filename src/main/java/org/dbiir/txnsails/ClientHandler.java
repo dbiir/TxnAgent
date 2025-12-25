@@ -16,7 +16,8 @@ import org.slf4j.LoggerFactory;
 
 class ClientHandler implements Runnable {
   private static final Logger logger = LoggerFactory.getLogger(ClientHandler.class);
-  private static final int BUFFER_SIZE = 8192;
+  private static final int BUFFER_SIZE = 4096;
+  private static final boolean asyncCommit = true;
   private final Socket clientSocket;
   private final WorkloadConfiguration configuration;
   private final int id;
@@ -33,17 +34,21 @@ class ClientHandler implements Runnable {
 
   @Override
   public void run() {
-    try (BufferedReader in = new BufferedReader(
-            new InputStreamReader(clientSocket.getInputStream(), StandardCharsets.UTF_8), BUFFER_SIZE);
-         BufferedWriter out = new BufferedWriter(
-                 new OutputStreamWriter(clientSocket.getOutputStream(), StandardCharsets.UTF_8), BUFFER_SIZE)) {
+    try (BufferedReader in =
+                 new BufferedReader(
+                         new InputStreamReader(clientSocket.getInputStream(), StandardCharsets.UTF_8),
+                         BUFFER_SIZE);
+         BufferedWriter out =
+                 new BufferedWriter(
+                         new OutputStreamWriter(clientSocket.getOutputStream(), StandardCharsets.UTF_8),
+                         BUFFER_SIZE)) {
       String message;
       while ((message = in.readLine()) != null) {
         long start = System.nanoTime();
         String[] queries = parseQueries(message.trim());
         String response = "";
-        for (String q: queries) {
-          logger.debug("{} Received: {}", worker.toString(), q);
+        for (String q : queries) {
+//          logger.debug("{} Received: {}", worker.toString(), q);
           String[] args = parseArgs(q.trim());
           String functionName = args[0].toLowerCase();
           try {
@@ -105,15 +110,13 @@ class ClientHandler implements Runnable {
                             ex.getMessage().split("\n")[0],
                             ex.getSQLState(),
                             ex.getErrorCode());
+            break;
           }
         }
         logger.debug("Execution time: {}us", (System.nanoTime() - start) / 1000);
-        logger.debug("{} response: {}", worker.toString(), response);
+//        logger.debug("{} response: {}", worker.toString(), response);
         out.write(response + "\n");
         out.flush();
-        if (this.worker.isLastSQL()) {
-          this.worker.prepare();
-        }
       }
     } catch (IOException ex) {
       System.out.println("Client disconnected: " + id);

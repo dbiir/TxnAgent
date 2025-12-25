@@ -30,6 +30,7 @@ import org.dbiir.txnsails.execution.utils.FileUtil;
 import org.dbiir.txnsails.execution.validation.ValidationMetaTable;
 import org.dbiir.txnsails.worker.Flusher;
 import org.dbiir.txnsails.worker.MetaWorker;
+import org.dbiir.txnsails.worker.StatisticsWorker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -49,6 +50,7 @@ public class TxnSailsServer {
             .addOption("c", "config", true, "[required] Workload configuration file")
             .addOption("d", "directory", true, "Base directory for the meta files")
             .addOption("s", "schema", true, "Base directory for the schema sql files")
+            .addOption("t", "partition", true, "Partition configuration file")
             .addOption("p", "phase", true, "Online predict or offline training");
 
     CommandLine argsLine = parser.parse(options, args);
@@ -68,8 +70,33 @@ public class TxnSailsServer {
     List<Connection> auxiliaryConnectionList = makeAuxiliaryConnections(workloadConfiguration);
     ValidationMetaTable.getInstance()
         .initHotspot(workloadConfiguration.getBenchmarkName(), auxiliaryConnectionList);
-    PartitionManager.getInstance().init(workloadConfiguration.getBenchmarkName());
+
+    String partitionFile = null;
+    if (argsLine.hasOption("t")) {
+      partitionFile = argsLine.getOptionValue("t").trim();
+      PartitionManager.getInstance()
+              .init(workloadConfiguration.getBenchmarkName(), partitionFile);
+    } else {
+      PartitionManager.getInstance().init(workloadConfiguration.getBenchmarkName());
+    }
+
     threadPool = Executors.newFixedThreadPool(128);
+
+    String statisticsDirectory = "statistics";
+    if (argsLine.hasOption("d")) {
+      statisticsDirectory = argsLine.getOptionValue("d").trim();
+      if (statisticsDirectory.contains("results")) {
+        statisticsDirectory = statisticsDirectory.replace("results", "statistics");
+        int lastIndex = statisticsDirectory.lastIndexOf("_");
+
+        if (lastIndex != -1) {
+          statisticsDirectory = statisticsDirectory.substring(0, lastIndex - 1);
+        }
+        statisticsDirectory += "/";
+      }
+    }
+    FileUtil.makeDirIfNotExists(statisticsDirectory);
+    StatisticsWorker statisticsWorker = new StatisticsWorker(statisticsDirectory);
 
     try {
       createFlushThread(
@@ -90,6 +117,7 @@ public class TxnSailsServer {
         }
       }
     } finally {
+      statisticsWorker.shutdown();
       finishFlushThread();
       threadPool.shutdown();
       closeServer();
