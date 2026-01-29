@@ -6,7 +6,6 @@ import lombok.Getter;
 import lombok.Setter;
 import org.dbiir.txnsails.common.TransactionStatus;
 import org.dbiir.txnsails.common.ValidationStatus;
-import org.dbiir.txnsails.execution.agent.ConcurrencyControlAgent;
 import org.dbiir.txnsails.execution.validation.ValidationMeta;
 import org.dbiir.txnsails.execution.validation.ValidationSet;
 import org.slf4j.Logger;
@@ -75,14 +74,14 @@ public class Participant {
       adjustTimestamp(transaction, dataItem);
       transaction.spinLock();
       transaction.setLowerBound(
-              Math.max(transaction.getLowerBound(), dataItem.getMaxReadTimestamp() + 1));
+          Math.max(transaction.getLowerBound(), dataItem.getMaxReadTimestamp() + 1));
       transaction.spinUnlock();
 
       if (transaction.getLowerBound() > transaction.getUpperBound()) {
         String msg =
-                "Transaction "
-                        + transaction.getId()
-                        + " failed in validation phase for write set, LB > UB !!!";
+            "Transaction "
+                + transaction.getId()
+                + " failed in validation phase for write set, LB > UB !!!";
         logger.warn(msg);
         validationStatus = ValidationStatus.FAILED;
         throw new SQLException(msg, "500");
@@ -98,7 +97,7 @@ public class Participant {
       for (int i = 0; i < itemCount; i++) {
         DataItem dataItem = participant.getWriteSet().get(i).getDataItem();
         dataItem.installVersion(
-                participant.getWriteSet().get(i).getOldVersion(), transaction.getCommitTimestamp());
+            participant.getWriteSet().get(i).getOldVersion(), transaction.getCommitTimestamp());
         dataItem.setMaxReadTimestamp(transaction.getCommitTimestamp());
         dataItem.releaseWriteLock(transaction.getId());
       }
@@ -155,9 +154,11 @@ public class Participant {
         continue;
       }
 
+      int mu =
+          PartitionManager.getInstance()
+              .getMu(dataItem.getPartitionId(), dataItem.getRelationName());
       if (t_i.getLowerBound() < t_j.getLowerBound()) {
-        t_i.setLowerBound(
-                t_j.getLowerBound() + ConcurrencyControlAgent.getInstance().getMu(t_i, t_j));
+        t_i.setLowerBound(t_j.getLowerBound() + mu);
       }
       t_j.setUpperBound(Math.min(t_j.getUpperBound(), t_i.getLowerBound() - 1));
 

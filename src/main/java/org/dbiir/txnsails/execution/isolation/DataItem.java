@@ -19,6 +19,8 @@ public class DataItem {
   @Getter private int writeCount;
   private long lease;
   private final List<RecordVersion> versions;
+  @Getter private int partitionId;
+  @Getter private String relationName;
 
   @Getter
   private final List<Transaction>
@@ -38,6 +40,14 @@ public class DataItem {
     this.readTransactions = new java.util.LinkedList<>();
     this.writeTransaction = new AtomicLong(0); // ? is necessary ?
     this.maxReadTimestamp = 0;
+    this.partitionId = -1;
+    this.relationName = null;
+  }
+
+  public DataItem(int key, int partitionId, String relationName) {
+    this(key);
+    this.partitionId = partitionId;
+    this.relationName = relationName;
   }
 
   public int getTotalCount() {

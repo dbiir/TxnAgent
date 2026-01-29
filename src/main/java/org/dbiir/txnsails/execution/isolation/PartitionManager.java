@@ -1,16 +1,16 @@
 package org.dbiir.txnsails.execution.isolation;
 
 import java.io.IOException;
-import java.net.Socket;
 import java.util.*;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import lombok.AllArgsConstructor;
 import lombok.Getter;
+import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.dbiir.txnsails.common.constants.SmallBankConstants;
 import org.dbiir.txnsails.common.constants.TPCCConstants;
 import org.dbiir.txnsails.common.constants.YCSBConstants;
-import org.dbiir.txnsails.common.types.CCType;
 import org.dbiir.txnsails.common.types.IsolationLevelType;
 import org.dbiir.txnsails.execution.validation.ValidationMeta;
 import org.slf4j.Logger;
@@ -23,12 +23,15 @@ public class PartitionManager {
   private final HashMap<String, ArrayList<LinkedList<DataItem>>> tableToDataItems;
   private final HashMap<String, ArrayList<ReentrantReadWriteLock>> tableToDataItemGuards;
 
+  // allocate partition config via micro partitions
   private PartitionConfig partitionConfig;
   private final HashMap<String, Integer> relationToPartitionSize;
-  private final HashMap<String, List<Integer>> relationToPartitions;
-  private Thread stasticThread;
+  private final HashMap<String, List<PartitionInfo>> relationToPartitions;
   @Getter private String workload;
   private long startTime = 0L;
+
+  // cross transaction statistic
+  private final HashMap<HashMap<Integer, Integer>, Integer> partitionRelations = new HashMap<>();
 
   static {
     INSTANCE = new PartitionManager();
@@ -47,13 +50,13 @@ public class PartitionManager {
       this.partitionConfig = new PartitionConfig().load(configFile);
       for (PartitionConfig.Relation relationConfig : this.partitionConfig.getRelations()) {
         this.relationToPartitionSize.put(
-                relationConfig.getName(), relationConfig.getPartitionSize());
+            relationConfig.getName(), relationConfig.getPartitionSize());
         this.relationToPartitions.put(relationConfig.getName(), new ArrayList<>());
       }
       for (PartitionConfig.Partition partition : this.partitionConfig.getPartitions()) {
         this.relationToPartitions
-                .get(partition.getRelationName())
-                .add(partition.getId());
+            .get(partition.getRelationName())
+            .add(new PartitionInfo(partition.getId()));
       }
     } catch (IOException e) {
       this.staticConfig = false;
@@ -64,12 +67,6 @@ public class PartitionManager {
   }
 
   public void init(String workload) {
-    // create the statistic thread
-    if (!staticConfig) {
-//      this.stasticThread = new Thread(new StasticThread());
-//      this.stasticThread.start();
-    }
-
     this.workload = workload;
     switch (workload) {
       case "ycsb":
@@ -82,7 +79,7 @@ public class PartitionManager {
         break;
       case "smallbank":
         for (Map.Entry<String, Integer> entry :
-                SmallBankConstants.TABLENAME_TO_HASH_SIZE.entrySet()) {
+            SmallBankConstants.TABLENAME_TO_HASH_SIZE.entrySet()) {
           if (entry.getValue() <= 0) {
             continue;
           }
@@ -104,7 +101,7 @@ public class PartitionManager {
     for (int i = 0; i < bucketSize; i++) {
       tableToDataItemGuards.get(relationName).add(new ReentrantReadWriteLock());
       LinkedList<DataItem> dataItems = new LinkedList<>();
-      dataItems.add(new DataItem(i));
+      dataItems.add(new DataItem(i, getPartitionId(relationName, i), relationName));
       tableToDataItems.get(relationName).add(dataItems);
     }
   }
@@ -118,15 +115,15 @@ public class PartitionManager {
     }
 
     int partitionId = getPartitionId(validationMeta);
-    return chooseIsolation(partitionId);
-  }
-
-  public int chooseIsolation(int partitionId) {
-    if (startTime == 0L) {
-      startTime = System.currentTimeMillis();
+    IsolationLevelType isolationLevelType = IsolationLevelType.SER;
+    if (staticConfig) {
+      isolationLevelType =
+          partitionConfig.getIsolationLevel(System.currentTimeMillis() - startTime, partitionId);
+    } else {
+      isolationLevelType =
+          relationToPartitions.get(validationMeta.getRelationName()).get(partitionId).getLevel();
     }
 
-    IsolationLevelType isolationLevelType = partitionConfig.getIsolationLevel(System.currentTimeMillis() - startTime, partitionId);
     switch (isolationLevelType) {
       case SER -> {
         return 0;
@@ -141,6 +138,14 @@ public class PartitionManager {
         logger.error("Unknown isolation level");
         return -1;
       }
+    }
+  }
+
+  public int getMu(int partitionId, String relationName) {
+    if (staticConfig) {
+      return 2;
+    } else {
+      return relationToPartitions.get(relationName).get(partitionId).getMu();
     }
   }
 
@@ -159,13 +164,22 @@ public class PartitionManager {
     int key = validationMeta.getIdForValidation();
     int partitionSize = this.relationToPartitionSize.get(validationMeta.getRelationName());
     int offsetPartition = key / partitionSize;
-    return this.relationToPartitions.get(validationMeta.getRelationName()).get(offsetPartition);
+    return this.relationToPartitions
+        .get(validationMeta.getRelationName())
+        .get(offsetPartition)
+        .getPartitionId();
+  }
+
+  public int getPartitionId(String relationName, int key) {
+    int partitionSize = this.relationToPartitionSize.get(relationName);
+    int offsetPartition = key / partitionSize;
+    return this.relationToPartitions.get(relationName).get(offsetPartition).getPartitionId();
   }
 
   public DataItem getAndAddDataItem(ValidationMeta validationMeta) {
     int bucketNum =
-            validationMeta.getIdForValidation()
-                    % getHashSizeByRelationName(validationMeta.getRelationName());
+        validationMeta.getIdForValidation()
+            % getHashSizeByRelationName(validationMeta.getRelationName());
     ReadWriteLock lock = tableToDataItemGuards.get(validationMeta.getRelationName()).get(bucketNum);
     lock.readLock().lock();
     for (DataItem item : tableToDataItems.get((validationMeta.getRelationName())).get(bucketNum)) {
@@ -175,8 +189,11 @@ public class PartitionManager {
       }
     }
     lock.readLock().unlock();
+    int partitionId = getPartitionId(validationMeta);
     lock.writeLock().lock();
-    DataItem item = new DataItem(validationMeta.getIdForValidation());
+    DataItem item =
+        new DataItem(
+            validationMeta.getIdForValidation(), partitionId, validationMeta.getRelationName());
     tableToDataItems.get((validationMeta.getRelationName())).get(bucketNum).add(item);
     lock.writeLock().unlock();
     return item;
@@ -199,32 +216,25 @@ public class PartitionManager {
     };
   }
 
-  public void close() {
-    this.stasticThread.interrupt();
-  }
-
   public static PartitionManager getInstance() {
     return INSTANCE;
   }
 
-  private class StasticThread extends Thread {
-    private static final String ip = "localhost";
-    private static final int port = 7654;
-    @Setter private String outputFilePrefix;
-    private CCType ccType;
-    private boolean online;
-    private Socket socket;
+  @Getter
+  @Setter
+  @NoArgsConstructor
+  @AllArgsConstructor
+  private class PartitionInfo {
+    private int partitionId;
+    private Integer mu;
+    private IsolationLevelType level;
+    private float workloadIntensive;
 
-    @Override
-    public void run() {
-      while (!Thread.interrupted()) {
-        try {
-          // TODO: collect the statistics of data items
-          Thread.sleep(5000L);
-        } catch (InterruptedException e) {
-          logger.info("Stastic thread interrupted: {}", e.getMessage());
-        }
-      }
+    public PartitionInfo(int partitionId) {
+      this.partitionId = partitionId;
+      this.mu = 2;
+      this.level = IsolationLevelType.SER;
+      this.workloadIntensive = 0.0F;
     }
   }
 }

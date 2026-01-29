@@ -74,8 +74,7 @@ public class TxnSailsServer {
     String partitionFile = null;
     if (argsLine.hasOption("t")) {
       partitionFile = argsLine.getOptionValue("t").trim();
-      PartitionManager.getInstance()
-              .init(workloadConfiguration.getBenchmarkName(), partitionFile);
+      PartitionManager.getInstance().init(workloadConfiguration.getBenchmarkName(), partitionFile);
     } else {
       PartitionManager.getInstance().init(workloadConfiguration.getBenchmarkName());
     }

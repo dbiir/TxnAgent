@@ -1,13 +1,5 @@
 package org.dbiir.txnsails.execution.isolation;
 
-import lombok.Data;
-import lombok.AllArgsConstructor;
-import lombok.NoArgsConstructor;
-import org.dbiir.txnsails.common.types.IsolationLevelType;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.yaml.snakeyaml.Yaml;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -15,6 +7,13 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import org.dbiir.txnsails.common.types.IsolationLevelType;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.yaml.snakeyaml.Yaml;
 
 @Data
 @NoArgsConstructor
@@ -74,7 +73,8 @@ public class PartitionConfig {
         stage.setEndTime((Integer) stageMap.get("endTime"));
 
         // convert partition
-        List<Map<String, Object>> isolationData = (List<Map<String, Object>>) stageMap.get("isolation");
+        List<Map<String, Object>> isolationData =
+            (List<Map<String, Object>>) stageMap.get("isolation");
         if (isolationData != null) {
           List<IsolationConfig> isolations = new ArrayList<>();
 
@@ -106,18 +106,18 @@ public class PartitionConfig {
   }
 
   public PartitionConfig load(String filePath) throws IOException {
-      // 1. read yaml file
-      Map<String, Object> yamlData = readYamlFile(filePath);
+    // 1. read yaml file
+    Map<String, Object> yamlData = readYamlFile(filePath);
 
-      // 2. extract workload data
-      Map<String, Object> workloadData = extractWorkloadData(yamlData);
+    // 2. extract workload data
+    Map<String, Object> workloadData = extractWorkloadData(yamlData);
 
-      // 3. create and load
-      PartitionConfig config = new PartitionConfig();
-      config.loadFromMap(workloadData);
+    // 3. create and load
+    PartitionConfig config = new PartitionConfig();
+    config.loadFromMap(workloadData);
 
-      return this;
-    }
+    return this;
+  }
 
   private Map<String, Object> readYamlFile(String filePath) throws IOException {
     Yaml yaml = new Yaml();
@@ -140,17 +140,14 @@ public class PartitionConfig {
   }
 
   public Stage getStageById(int stageId) {
-    return stages.stream()
-            .filter(s -> s.getId() == stageId)
-            .findFirst()
-            .orElse(null);
+    return stages.stream().filter(s -> s.getId() == stageId).findFirst().orElse(null);
   }
 
   public Stage getStageByTime(long currentTime) {
     return stages.stream()
-            .filter(s -> currentTime >= s.getStartTime() && currentTime < s.getEndTime())
-            .findFirst()
-            .orElse(null);
+        .filter(s -> currentTime >= s.getStartTime() && currentTime < s.getEndTime())
+        .findFirst()
+        .orElse(null);
   }
 
   public IsolationLevelType getIsolationLevel(long currentTime, int partitionId) {
@@ -166,7 +163,7 @@ public class PartitionConfig {
   @AllArgsConstructor
   public static class Relation {
     private String name;
-    private Integer partitionSize;  // partitionSize in YAML
+    private Integer partitionSize; // partitionSize in YAML
   }
 
   @Data
@@ -182,7 +179,7 @@ public class PartitionConfig {
   @AllArgsConstructor
   public static class IsolationConfig {
     private Integer id;
-    private IsolationLevelType level;  // level in YAML
+    private IsolationLevelType level; // level in YAML
   }
 
   @Data
@@ -197,10 +194,10 @@ public class PartitionConfig {
     public IsolationLevelType getIsolationForPartition(int partitionId) {
       if (isolations == null) return null;
       return isolations.stream()
-              .filter(i -> i.getId() == partitionId)
-              .findFirst()
-              .map(IsolationConfig::getLevel)
-              .orElse(null);
+          .filter(i -> i.getId() == partitionId)
+          .findFirst()
+          .map(IsolationConfig::getLevel)
+          .orElse(null);
     }
   }
 }

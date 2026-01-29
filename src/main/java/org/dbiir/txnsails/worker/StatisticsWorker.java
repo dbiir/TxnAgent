@@ -1,9 +1,5 @@
 package org.dbiir.txnsails.worker;
 
-import lombok.Getter;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.BufferedWriter;
 import java.io.FileWriter;
 import java.io.IOException;
@@ -16,7 +12,9 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.stream.Collectors;
+import lombok.Getter;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class StatisticsWorker {
   public static class TransactionSample {
@@ -76,8 +74,7 @@ public class StatisticsWorker {
       totalLatency.addAndGet(transaction.getLatency());
 
       for (Integer partition : transaction.getPartitions()) {
-        partitionStats.computeIfAbsent(partition,
-                p -> new PartitionStats()).update(transaction);
+        partitionStats.computeIfAbsent(partition, p -> new PartitionStats()).update(transaction);
       }
     }
 
@@ -122,7 +119,8 @@ public class StatisticsWorker {
   }
 
   private static Logger logger = LoggerFactory.getLogger(StatisticsWorker.class);
-  private final DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
+  private final DateTimeFormatter formatter =
+      DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
   private final ConcurrentMap<Long, TimeWindowStats> timeWindowStats = new ConcurrentHashMap<>();
   private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
   private final AtomicLong currentWindow = new AtomicLong();
@@ -141,32 +139,37 @@ public class StatisticsWorker {
     long now = System.currentTimeMillis();
     currentWindow.set(now / windowSizeMs);
 
-    scheduler.scheduleAtFixedRate(() -> {
-      long currentTime = System.currentTimeMillis();
-      long windowKey = currentTime / windowSizeMs;
+    scheduler.scheduleAtFixedRate(
+        () -> {
+          long currentTime = System.currentTimeMillis();
+          long windowKey = currentTime / windowSizeMs;
 
-      if (windowKey > currentWindow.get()) {
-        TimeWindowStats oldStats = timeWindowStats.remove(currentWindow.get());
-        if (oldStats != null) {
-          completedWindows.offer(oldStats);
-        }
-        currentWindow.set(windowKey);
-      }
-    }, 100, 100, TimeUnit.MILLISECONDS);
-
-    scheduler.execute(() -> {
-      while (running) {
-        try {
-          TimeWindowStats stats = completedWindows.poll(100, TimeUnit.MILLISECONDS);
-          if (stats != null) {
-            processCompletedWindow(stats);
+          if (windowKey > currentWindow.get()) {
+            TimeWindowStats oldStats = timeWindowStats.remove(currentWindow.get());
+            if (oldStats != null) {
+              completedWindows.offer(oldStats);
+            }
+            currentWindow.set(windowKey);
           }
-        } catch (InterruptedException e) {
-          Thread.currentThread().interrupt();
-          break;
-        }
-      }
-    });
+        },
+        100,
+        100,
+        TimeUnit.MILLISECONDS);
+
+    scheduler.execute(
+        () -> {
+          while (running) {
+            try {
+              TimeWindowStats stats = completedWindows.poll(100, TimeUnit.MILLISECONDS);
+              if (stats != null) {
+                processCompletedWindow(stats);
+              }
+            } catch (InterruptedException e) {
+              Thread.currentThread().interrupt();
+              break;
+            }
+          }
+        });
   }
 
   public void recordTransaction(TransactionSample transaction) {
@@ -175,8 +178,8 @@ public class StatisticsWorker {
     }
 
     long windowKey = transaction.endTime / windowSizeMs;
-    TimeWindowStats stats = timeWindowStats.computeIfAbsent(windowKey,
-            k -> new TimeWindowStats(k * windowSizeMs));
+    TimeWindowStats stats =
+        timeWindowStats.computeIfAbsent(windowKey, k -> new TimeWindowStats(k * windowSizeMs));
     stats.addTransaction(transaction);
   }
 
@@ -200,9 +203,7 @@ public class StatisticsWorker {
     return stats != null ? stats.getPartitionRollbackRate(partitionId) : 0.0;
   }
 
-  /**
-   * return past N windows' throughput trend
-   */
+  /** return past N windows' throughput trend */
   public List<Integer> getThroughputTrend(int windowCount) {
     List<Integer> trend = new ArrayList<>();
     long current = currentWindow.get();
@@ -216,22 +217,20 @@ public class StatisticsWorker {
     return trend;
   }
 
-  /**
-   * process completed window
-   */
+  /** process completed window */
   private void processCompletedWindow(TimeWindowStats stats) {
     // print to this.filename in statistic directory in append mode
-    String content = String.format(
+    String content =
+        String.format(
             "Window [%s] processed: Throughput=%d, AvgLatency=%.2fms, RollbackRate=%.2f%%%n",
             Instant.ofEpochMilli(stats.windowStart),
             stats.getThroughput(),
             stats.getAverageLatency(),
-            stats.getRollbackRate() * 100
-    );
+            stats.getRollbackRate() * 100);
 
     try (FileWriter fw = new FileWriter(this.filename, true);
-         BufferedWriter bw = new BufferedWriter(fw);
-         PrintWriter out = new PrintWriter(bw)) {
+        BufferedWriter bw = new BufferedWriter(fw);
+        PrintWriter out = new PrintWriter(bw)) {
 
       out.print(content);
 
@@ -240,9 +239,7 @@ public class StatisticsWorker {
     }
   }
 
-  /**
-   * close
-   */
+  /** close */
   public void shutdown() {
     running = false;
     scheduler.shutdown();

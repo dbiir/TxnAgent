@@ -35,20 +35,20 @@ class ClientHandler implements Runnable {
   @Override
   public void run() {
     try (BufferedReader in =
-                 new BufferedReader(
-                         new InputStreamReader(clientSocket.getInputStream(), StandardCharsets.UTF_8),
-                         BUFFER_SIZE);
-         BufferedWriter out =
-                 new BufferedWriter(
-                         new OutputStreamWriter(clientSocket.getOutputStream(), StandardCharsets.UTF_8),
-                         BUFFER_SIZE)) {
+            new BufferedReader(
+                new InputStreamReader(clientSocket.getInputStream(), StandardCharsets.UTF_8),
+                BUFFER_SIZE);
+        BufferedWriter out =
+            new BufferedWriter(
+                new OutputStreamWriter(clientSocket.getOutputStream(), StandardCharsets.UTF_8),
+                BUFFER_SIZE)) {
       String message;
       while ((message = in.readLine()) != null) {
         long start = System.nanoTime();
         String[] queries = parseQueries(message.trim());
         String response = "";
         for (String q : queries) {
-//          logger.debug("{} Received: {}", worker.toString(), q);
+          //          logger.debug("{} Received: {}", worker.toString(), q);
           String[] args = parseArgs(q.trim());
           String functionName = args[0].toLowerCase();
           try {
@@ -105,16 +105,16 @@ class ClientHandler implements Runnable {
 
           } catch (SQLException ex) {
             response =
-                    MessageFormat.format(
-                            MetaWorker.ERROR_FORMATTER,
-                            ex.getMessage().split("\n")[0],
-                            ex.getSQLState(),
-                            ex.getErrorCode());
+                MessageFormat.format(
+                    MetaWorker.ERROR_FORMATTER,
+                    ex.getMessage().split("\n")[0],
+                    ex.getSQLState(),
+                    ex.getErrorCode());
             break;
           }
         }
         logger.debug("Execution time: {}us", (System.nanoTime() - start) / 1000);
-//        logger.debug("{} response: {}", worker.toString(), response);
+        //        logger.debug("{} response: {}", worker.toString(), response);
         out.write(response + "\n");
         out.flush();
       }

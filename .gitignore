@@ -37,6 +37,9 @@ build/
 ### Mac OS ###
 .DS_Store
 
+### Python ###
+venv/
+
 ### GRADLE ###
 .gradle/
 

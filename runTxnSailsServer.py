@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!venv/bin/python3
 import os
 from datetime import datetime
 import time
@@ -8,8 +8,6 @@ import subprocess
 import signal
 import json
 import numpy as np
-from isolation_adapter.services.offline import OfflineService
-
 
 prefix_cmd_local = "java -jar target/txnSailsServer-1.0-SNAPSHOT-fat.jar"
 prefix_cmd_remote_java = "java -cp target/tristar/tristar/lib/ -jar target/tristar/tristar/tristar.jar "
