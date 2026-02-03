@@ -55,21 +55,21 @@ public class Participant {
     for (int validationPhase = 0; validationPhase < itemCount; validationPhase++) {
       // do timestamp adjustment
       DataItem dataItem = writeSet.get(validationPhase).getDataItem();
-      //      int retryCount = 0;
-      //      while (!dataItem.addVirtualWriteLock(transaction.getId())) {
-      //        retryCount++;
-      //        if (retryCount >= 10) {
-      //          String msg =
-      //                  "Transaction "
-      //                          + transaction.getId()
-      //                          + " failed to add virtual write lock for item, awful update !!!";
-      //          logger.warn(msg);
-      //          validationStatus = ValidationStatus.FAILED;
-      //          throw new SQLException(msg, "500");
-      //        } else {
-      //          Thread.yield();
-      //        }
-      //      }
+      // int retryCount = 0;
+      // while (!dataItem.addVirtualWriteLock(transaction.getId())) {
+      // retryCount++;
+      // if (retryCount >= 10) {
+      // String msg =
+      // "Transaction "
+      // + transaction.getId()
+      // + " failed to add virtual write lock for item, awful update !!!";
+      // logger.warn(msg);
+      // validationStatus = ValidationStatus.FAILED;
+      // throw new SQLException(msg, "500");
+      // } else {
+      // Thread.yield();
+      // }
+      // }
 
       adjustTimestamp(transaction, dataItem);
       transaction.spinLock();
@@ -134,9 +134,9 @@ public class Participant {
     dataItem.acquireReadLock();
     for (Transaction t_j : dataItem.getReadTransactions()) {
       logger.debug("adjustTimestamp: t_j={}", t_j.getId());
-      //      if (t_j.getId() == t_i.getId()) {
-      //        continue;
-      //      }
+      // if (t_j.getId() == t_i.getId()) {
+      // continue;
+      // }
       // add spinlock to concurrent transaction
       if (t_i.getId() < t_j.getId()) {
         t_i.spinLock();
@@ -147,8 +147,10 @@ public class Participant {
       }
       // wait for validated transaction, and continue the validation
       // use RTS to adjust LB
-      if (t_j.getStatus().equals(TransactionStatus.VALIDATED)) {
-        while (t_j.getStatus().equals(TransactionStatus.VALIDATED)) {
+      if (t_j.getStatus().equals(TransactionStatus.VALIDATED)
+          || t_j.getStatus().equals(TransactionStatus.PREPARED)) {
+        while (t_j.getStatus().equals(TransactionStatus.VALIDATED)
+            || t_j.getStatus().equals(TransactionStatus.PREPARED)) {
           Thread.yield();
         }
         continue;

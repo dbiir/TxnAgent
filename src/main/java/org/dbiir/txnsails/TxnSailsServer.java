@@ -6,9 +6,7 @@ import java.io.File;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.SQLException;
+import java.sql.*;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -28,7 +26,6 @@ import org.dbiir.txnsails.execution.WorkloadConfiguration;
 import org.dbiir.txnsails.execution.isolation.PartitionManager;
 import org.dbiir.txnsails.execution.utils.FileUtil;
 import org.dbiir.txnsails.execution.validation.ValidationMetaTable;
-import org.dbiir.txnsails.worker.Flusher;
 import org.dbiir.txnsails.worker.MetaWorker;
 import org.dbiir.txnsails.worker.StatisticsWorker;
 import org.slf4j.Logger;
@@ -95,7 +92,15 @@ public class TxnSailsServer {
       }
     }
     FileUtil.makeDirIfNotExists(statisticsDirectory);
-    StatisticsWorker statisticsWorker = new StatisticsWorker(statisticsDirectory);
+    // TODO: init statistics worker with more information
+    StatisticsWorker statisticsWorker =
+        new StatisticsWorker(statisticsDirectory, workloadConfiguration.getBenchmarkName());
+
+    try {
+      releasePostgreSQLTransactions();
+    } catch (Exception e) {
+      System.out.println("Release postgres prepared transactions failed: " + e.getMessage());
+    }
 
     try {
       createFlushThread(
@@ -117,10 +122,42 @@ public class TxnSailsServer {
       }
     } finally {
       statisticsWorker.shutdown();
-      finishFlushThread();
+      //      finishFlushThread();
       threadPool.shutdown();
-      closeServer();
+      //      closeServer();
     }
+  }
+
+  public static void releasePostgreSQLTransactions() throws ClassNotFoundException, SQLException {
+    long startTime = System.nanoTime();
+    String[] ips = {"127.0.0.1"};
+
+    Class.forName("org.postgresql.Driver");
+    for (String ip : ips) {
+      String url = "jdbc:postgresql://" + ip + ":5432/ycsb";
+      String username = "zqy";
+      String password = "Ss123!@#";
+
+      Connection connection = DriverManager.getConnection(url, username, password);
+      Statement statement = connection.createStatement();
+      String sql = "SELECT gid FROM pg_prepared_xacts where database = current_database()";
+      ResultSet resultSet = statement.executeQuery(sql);
+      while (resultSet.next()) {
+        String xid = resultSet.getString(1);
+        sql = "ROLLBACK PREPARED '" + xid + "'";
+        System.out.println(sql);
+        Statement stmt = connection.createStatement();
+        stmt.execute(sql);
+        stmt.close();
+      }
+
+      resultSet.close();
+      statement.close();
+      connection.close();
+    }
+    long endTime = System.nanoTime();
+    System.out.println(
+        "Release postgres transaction, time consuming: " + (endTime - startTime) / 1000 + " us");
   }
 
   public static JacksonXmlConfiguration buildConfiguration(String filename) throws IOException {
@@ -202,15 +239,15 @@ public class TxnSailsServer {
       }
     }
 
-    FileUtil.makeDirIfNotExists(metaDirectory);
-    logger.info("Create Flush Thread");
-    flushThread = new Thread(new Flusher(benchmark, metaDirectory, ccType, onlinePredict));
-    flushThread.start();
+    //    FileUtil.makeDirIfNotExists(metaDirectory);
+    //    logger.info("Create Flush Thread");
+    //    flushThread = new Thread(new Flusher(benchmark, metaDirectory, ccType, onlinePredict));
+    //    flushThread.start();
   }
 
-  private static void finishFlushThread() {
-    flushThread.interrupt();
-  }
+  //  private static void finishFlushThread() {
+  //    flushThread.interrupt();
+  //  }
 
   public static void closeServer() throws IOException {
     running = false;

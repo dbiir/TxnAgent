@@ -42,6 +42,7 @@ public class PartitionConfig {
         Relation relation = new Relation();
         relation.setName((String) relationMap.get("name"));
         relation.setPartitionSize((Integer) relationMap.get("partitionSize"));
+        relation.setPartitionCount((Integer) relationMap.get("partitionCount"));
         relations.add(relation);
       }
 
@@ -88,7 +89,7 @@ public class PartitionConfig {
               try {
                 isolation.setLevel(IsolationLevelType.valueOf(isolationStr));
               } catch (IllegalArgumentException e) {
-                logger.warn("Unknown isolation level: {}, using default", isolationStr);
+                logger.error("Unknown isolation level: {}, using default", isolationStr);
                 isolation.setLevel(IsolationLevelType.SER);
               }
             }
@@ -113,8 +114,7 @@ public class PartitionConfig {
     Map<String, Object> workloadData = extractWorkloadData(yamlData);
 
     // 3. create and load
-    PartitionConfig config = new PartitionConfig();
-    config.loadFromMap(workloadData);
+    this.loadFromMap(workloadData);
 
     return this;
   }
@@ -164,6 +164,7 @@ public class PartitionConfig {
   public static class Relation {
     private String name;
     private Integer partitionSize; // partitionSize in YAML
+    private Integer partitionCount;
   }
 
   @Data

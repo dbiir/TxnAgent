@@ -17,7 +17,7 @@ import org.slf4j.LoggerFactory;
 class ClientHandler implements Runnable {
   private static final Logger logger = LoggerFactory.getLogger(ClientHandler.class);
   private static final int BUFFER_SIZE = 4096;
-  private static final boolean asyncCommit = true;
+  private static final boolean asyncCommit = false;
   private final Socket clientSocket;
   private final WorkloadConfiguration configuration;
   private final int id;
@@ -48,7 +48,7 @@ class ClientHandler implements Runnable {
         String[] queries = parseQueries(message.trim());
         String response = "";
         for (String q : queries) {
-          //          logger.debug("{} Received: {}", worker.toString(), q);
+          // logger.debug("{} Received: {}", worker.toString(), q);
           String[] args = parseArgs(q.trim());
           String functionName = args[0].toLowerCase();
           try {
@@ -56,6 +56,13 @@ class ClientHandler implements Runnable {
               case "execute" -> {
                 if (ccType == CCType.FS) {
                   response = worker.executeFS(args, 3);
+                  if (worker.isLastSQL()) {
+                    if (asyncCommit) {
+                      Thread.startVirtualThread(worker::prepare);
+                    } else {
+                      worker.prepare();
+                    }
+                  }
                 } else {
                   response = worker.execute(args, 3);
                 }
@@ -63,7 +70,19 @@ class ClientHandler implements Runnable {
               }
               case "commit" -> {
                 if (ccType == CCType.FS) {
-                  worker.commitFS();
+                  if (asyncCommit) {
+                    worker.waitForPrepare();
+                    Thread.startVirtualThread(
+                        () -> {
+                          try {
+                            worker.commitFS();
+                          } catch (Exception e) {
+                            e.printStackTrace();
+                          }
+                        });
+                  } else {
+                    worker.commitFS();
+                  }
                 } else {
                   worker.commit();
                 }
@@ -102,7 +121,6 @@ class ClientHandler implements Runnable {
                 response = "Unknown function: " + functionName;
               }
             }
-
           } catch (SQLException ex) {
             response =
                 MessageFormat.format(
@@ -114,7 +132,7 @@ class ClientHandler implements Runnable {
           }
         }
         logger.debug("Execution time: {}us", (System.nanoTime() - start) / 1000);
-        //        logger.debug("{} response: {}", worker.toString(), response);
+        // logger.debug("{} response: {}", worker.toString(), response);
         out.write(response + "\n");
         out.flush();
       }

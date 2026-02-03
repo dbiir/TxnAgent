@@ -17,7 +17,9 @@
 
 package org.dbiir.txnsails.common.constants;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 
 public abstract class YCSBConstants {
 
@@ -76,5 +78,72 @@ public abstract class YCSBConstants {
     }
 
     return finalSQL;
+  }
+
+  private static final HashMap<String, Integer> relationToPartitionCount = new HashMap<>();
+  private static final HashMap<String, Integer> relationToPartitionOffset = new HashMap<>();
+  private static final HashMap<String, Integer> relationToPartitionSize = new HashMap<>();
+
+  static {
+    relationToPartitionCount.put(TABLE_NAME, 4);
+    updatePartitionOffset();
+  }
+
+  private static void updatePartitionOffset() {
+    relationToPartitionOffset.put(TABLE_NAME, 0);
+  }
+
+  public static void loadPartitioningInfo(
+      HashMap<String, Integer> tablePartitionCountMap,
+      HashMap<String, Integer> tablePartitionSizeMap) {
+    for (String tableName : tablePartitionCountMap.keySet()) {
+      if (!relationToPartitionCount.containsKey(tableName)) {
+        System.out.println("Unknown table name when loading partitioning info: " + tableName);
+        continue;
+      }
+      relationToPartitionCount.put(tableName, tablePartitionCountMap.get(tableName));
+      relationToPartitionSize.put(tableName, tablePartitionSizeMap.get(tableName));
+    }
+    updatePartitionOffset();
+  }
+
+  public static int transferToGlobalPartitionId(String tableName, int partitionId) {
+    if (!relationToPartitionOffset.containsKey(tableName)) {
+      System.out.println("Unknown table name when getting global partition id: " + tableName);
+      return -1;
+    }
+    int offset = relationToPartitionOffset.get(tableName);
+    return partitionId + offset;
+  }
+
+  public static int transferToOffsetPartitionId(String tableName, int globalPartitionId) {
+    if (!relationToPartitionOffset.containsKey(tableName)) {
+      System.out.println("Unknown table name when getting offset partition id: " + tableName);
+      return -1;
+    }
+    int offset = relationToPartitionOffset.get(tableName);
+    return globalPartitionId - offset;
+  }
+
+  public static int getGlobalPartitionIdByKey(String tableName, int key) {
+    if (!relationToPartitionOffset.containsKey(tableName)) {
+      System.out.println("Unknown table name when getting offset partition id: " + tableName);
+      return -1;
+    }
+    int offset = relationToPartitionOffset.get(tableName);
+    int partitionId = key / relationToPartitionSize.get(tableName);
+    return partitionId + offset;
+  }
+
+  public static List<Integer> getGlobalPartitionIds() {
+    List<Integer> globalPartitionIds = new ArrayList<>();
+    for (String tableName : relationToPartitionCount.keySet()) {
+      int partitionCount = relationToPartitionCount.get(tableName);
+      int offset = relationToPartitionOffset.get(tableName);
+      for (int i = 0; i < partitionCount; i++) {
+        globalPartitionIds.add(offset + i);
+      }
+    }
+    return globalPartitionIds;
   }
 }

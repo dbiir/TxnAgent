@@ -26,12 +26,9 @@ public class PartitionManager {
   // allocate partition config via micro partitions
   private PartitionConfig partitionConfig;
   private final HashMap<String, Integer> relationToPartitionSize;
-  private final HashMap<String, List<PartitionInfo>> relationToPartitions;
+  private final HashMap<Integer, PartitionInfo> partitions; // partitionId -> PartitionInfo
   @Getter private String workload;
   private long startTime = 0L;
-
-  // cross transaction statistic
-  private final HashMap<HashMap<Integer, Integer>, Integer> partitionRelations = new HashMap<>();
 
   static {
     INSTANCE = new PartitionManager();
@@ -41,7 +38,7 @@ public class PartitionManager {
     this.tableToDataItems = new HashMap<>();
     this.tableToDataItemGuards = new HashMap<>();
     this.relationToPartitionSize = new HashMap<>();
-    this.relationToPartitions = new HashMap<>();
+    this.partitions = new HashMap<>();
   }
 
   public void init(String workload, String configFile) {
@@ -51,12 +48,9 @@ public class PartitionManager {
       for (PartitionConfig.Relation relationConfig : this.partitionConfig.getRelations()) {
         this.relationToPartitionSize.put(
             relationConfig.getName(), relationConfig.getPartitionSize());
-        this.relationToPartitions.put(relationConfig.getName(), new ArrayList<>());
       }
       for (PartitionConfig.Partition partition : this.partitionConfig.getPartitions()) {
-        this.relationToPartitions
-            .get(partition.getRelationName())
-            .add(new PartitionInfo(partition.getId()));
+        this.partitions.put(partition.getId(), new PartitionInfo(partition.getId()));
       }
     } catch (IOException e) {
       this.staticConfig = false;
@@ -118,20 +112,20 @@ public class PartitionManager {
     IsolationLevelType isolationLevelType = IsolationLevelType.SER;
     if (staticConfig) {
       isolationLevelType =
-          partitionConfig.getIsolationLevel(System.currentTimeMillis() - startTime, partitionId);
+          partitionConfig.getIsolationLevel(
+              (System.currentTimeMillis() - startTime) / 1000, partitionId);
     } else {
-      isolationLevelType =
-          relationToPartitions.get(validationMeta.getRelationName()).get(partitionId).getLevel();
+      isolationLevelType = partitions.get(partitionId).getLevel();
     }
 
     switch (isolationLevelType) {
-      case SER -> {
+      case RC -> {
         return 0;
       }
       case SI -> {
         return 1;
       }
-      case RC -> {
+      case SER -> {
         return 2;
       }
       default -> {
@@ -145,11 +139,12 @@ public class PartitionManager {
     if (staticConfig) {
       return 2;
     } else {
-      return relationToPartitions.get(relationName).get(partitionId).getMu();
+      return partitions.get(partitionId).getMu();
     }
   }
 
   /*
+   * @return global unique partition id
    * this.relationToPartition:
    *    - relation name -> list of partition ids, e.g., R1 -> [0,1,2], R2 -> [3,4,5]
    * this.relationToPartitionSize:
@@ -161,19 +156,39 @@ public class PartitionManager {
    *    - partitionId: this.relationToPartitions.get(R2).get(1) = 4
    */
   public int getPartitionId(ValidationMeta validationMeta) {
+    String relationName = validationMeta.getRelationName();
     int key = validationMeta.getIdForValidation();
-    int partitionSize = this.relationToPartitionSize.get(validationMeta.getRelationName());
-    int offsetPartition = key / partitionSize;
-    return this.relationToPartitions
-        .get(validationMeta.getRelationName())
-        .get(offsetPartition)
-        .getPartitionId();
+    return getPartitionId(relationName, key);
   }
 
   public int getPartitionId(String relationName, int key) {
-    int partitionSize = this.relationToPartitionSize.get(relationName);
-    int offsetPartition = key / partitionSize;
-    return this.relationToPartitions.get(relationName).get(offsetPartition).getPartitionId();
+    return switch (workload) {
+      case "ycsb" -> {
+        if (!YCSBConstants.TABLENAME_TO_HASH_SIZE.containsKey(relationName)) {
+          logger.error("Unknown relation name: {}", relationName);
+          yield -1;
+        }
+        yield YCSBConstants.getGlobalPartitionIdByKey(relationName, key);
+      }
+      case "smallbank" -> {
+        if (!SmallBankConstants.TABLENAME_TO_HASH_SIZE.containsKey(relationName)) {
+          logger.error("Unknown relation name: {}", relationName);
+          yield -1;
+        }
+        yield SmallBankConstants.getGlobalPartitionIdByKey(relationName, key);
+      }
+      case "tpcc" -> {
+        if (!TPCCConstants.TABLENAME_TO_HASH_SIZE.containsKey(relationName)) {
+          logger.error("Unknown relation name: {}", relationName);
+          yield -1;
+        }
+        yield TPCCConstants.getGlobalPartitionIdByKey(relationName, key);
+      }
+      default -> {
+        logger.error("Unknown workload: {}", workload);
+        yield -1;
+      }
+    };
   }
 
   public DataItem getAndAddDataItem(ValidationMeta validationMeta) {

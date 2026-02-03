@@ -170,12 +170,12 @@ public class OnlineWorker {
     meta.setTemplateSQL(templateSQL);
     if (templateSQL.getUniqueKeyNumber() <= args.length - offset) {
       lastSQL = meta.addRuntimeArgs(List.of(args), offset);
-      //      logger.debug(
-      //          "{}{}, {}, Id for validation: {}",
-      //          this.toString(),
-      //          templateSQL.getSQL(),
-      //          Arrays.asList(args).subList(offset, args.length),
-      //          meta.getIdForValidation());
+      // logger.debug(
+      // "{}{}, {}, Id for validation: {}",
+      // this.toString(),
+      // templateSQL.getSQL(),
+      // Arrays.asList(args).subList(offset, args.length),
+      // meta.getIdForValidation());
       if (shouldSample) {
         addSampleMeta(
             templateSQL.getOp(),
@@ -204,7 +204,6 @@ public class OnlineWorker {
     try (PreparedStatement stmtc =
         this.getPreparedStatement(
             connections[isolationLevel], new SQLStmt(executeSQL), args, offset, templateSQL)) {
-      //      stmtc.setQueryTimeout(1);
 
       try (ResultSet rs = firstUse ? omitBeginStatement(stmtc) : stmtc.executeQuery()) {
         int v = -1;
@@ -222,11 +221,11 @@ public class OnlineWorker {
           rows.add(row);
         }
         // parse and wrap the results
-        //        results += wrapResults(rows);
+        // results += wrapResults(rows);
 
         // record the version if it needs, support scan-based
         validationMetaFS[validationMetaFSIdx - 1].setOldVersion(v);
-        //        logger.debug("{} {} execute finished", this.toString(), executeSQL);
+        // logger.debug("{} {} execute finished", this.toString(), executeSQL);
       } catch (SQLException ex) {
         // check if the error can retry automatically, in the future
         this.resultList[isolationLevel].setException(ex);
@@ -245,11 +244,6 @@ public class OnlineWorker {
       // write operation
       TransactionManager.getInstance().write(this.transaction, meta);
       this.participants[isolationLevel].addWriteValidationMeta(meta);
-    }
-
-    if (lastSQL) {
-
-      prepare();
     }
 
     return results;
@@ -325,7 +319,7 @@ public class OnlineWorker {
     // execute the sql
     try (PreparedStatement stmtc =
         this.getPreparedStatement(conn, new SQLStmt(executeSQL), args, offset, templateSQL)) {
-      //      stmtc.setQueryTimeout(1);
+      // stmtc.setQueryTimeout(1);
       try (ResultSet rs = stmtc.executeQuery()) {
         int v = -1;
         List<List<String>> rows = new ArrayList<>(2);
@@ -380,7 +374,10 @@ public class OnlineWorker {
     }
 
     clearPreviousTransactionInfo();
-    /* sample transaction if txnSails needs and choose whether sample next transaction */
+    /*
+     * sample transaction if txnSails needs and choose whether sample next
+     * transaction
+     */
     shouldSample = random.nextDouble() < SAMPLE_PROBABILITY;
     this.transactionId =
         ((System.nanoTime() << 10) | (Thread.currentThread().threadId() & 0x3ff)) & mask;
@@ -399,7 +396,10 @@ public class OnlineWorker {
       logger.debug("{} has been rollbacked", this.toString());
     } finally {
       clearPreviousTransactionInfo();
-      /* sample transaction if txnSails needs and choose whether sample next transaction */
+      /*
+       * sample transaction if txnSails needs and choose whether sample next
+       * transaction
+       */
       shouldSample = random.nextDouble() < SAMPLE_PROBABILITY;
       this.transactionId =
           ((System.nanoTime() << 10) | (Thread.currentThread().threadId() & 0x3ff)) & mask;
@@ -410,7 +410,7 @@ public class OnlineWorker {
     }
   }
 
-  public void prepare() throws SQLException {
+  public void prepare() {
     try {
       TransactionManager.getInstance().prepare(transaction);
       transaction.setStatus(TransactionStatus.PREPARED);
@@ -421,7 +421,18 @@ public class OnlineWorker {
           this.transaction.getId(),
           ex.getMessage());
       transaction.setStatus(TransactionStatus.PREPARE_FAILED);
-      throw ex;
+      // throw ex;
+    }
+  }
+
+  public void waitForPrepare() {
+    while (this.transaction.getStatus() != TransactionStatus.PREPARED
+        || this.transaction.getStatus() != TransactionStatus.PREPARE_FAILED) {
+      try {
+        Thread.sleep(1);
+      } catch (InterruptedException e) {
+        e.printStackTrace();
+      }
     }
   }
 
@@ -440,10 +451,11 @@ public class OnlineWorker {
     for (AsyncResultWrapper result : this.resultList) {
       if (!result.isSuccess()) {
         logger.error(
-            "{} transaction #{} commit failed after preparation, {}",
+            "{} transaction #{} commit failed, {}",
             Thread.currentThread().getName(),
             this.transaction.getId(),
             result.getException().getMessage());
+        throw new SQLException(result.getException().getMessage(), "500");
       }
     }
 
@@ -486,8 +498,10 @@ public class OnlineWorker {
   }
 
   private void validate() throws SQLException {
-    /* 0. block transaction during the transition until
-     * 1. acquire validation lock (transition: acquire the lock according the stricter isolation level)
+    /*
+     * 0. block transaction during the transition until
+     * 1. acquire validation lock (transition: acquire the lock according the
+     * stricter isolation level)
      * 2. check the version
      */
     while (Adapter.getInstance().isInSwitchPhase()
@@ -577,7 +591,7 @@ public class OnlineWorker {
               .fetchUnknownVersionCache(
                   meta.getTemplateSQL().getTable(), meta.getIdForValidation());
       if (v != meta.getOldVersion()) {
-        //          releaseValidationLocks(false);
+        // releaseValidationLocks(false);
         String msg =
             String.format(
                 "Validation failed for ycsb_key #%d, usertable", meta.getIdForValidation());
@@ -762,7 +776,7 @@ public class OnlineWorker {
       sb.append(String.format("%02x", row.size())); // record the column size in this row
       for (String col : row) {
         // record the string length in 4 bytes
-        //        System.out.println("col.length() = " + col.length());
+        // System.out.println("col.length() = " + col.length());
         sb.append(String.format("%04x", col.length()));
         sb.append(col); // wrap column value
       }

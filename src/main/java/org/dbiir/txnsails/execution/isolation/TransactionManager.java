@@ -12,6 +12,7 @@ import org.dbiir.txnsails.common.AsyncResultWrapper;
 import org.dbiir.txnsails.common.TransactionStatus;
 import org.dbiir.txnsails.common.ValidationStatus;
 import org.dbiir.txnsails.execution.validation.ValidationMeta;
+import org.dbiir.txnsails.worker.StatisticsWorker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -21,6 +22,7 @@ public class TransactionManager {
   private static final int TRANSACTION_HASH_SIZE = 128; // must be configured to 2^n
 
   private String workload;
+  private StatisticsWorker statisticsWorker;
   // active transaction list
   private final List<List<Transaction>> activeTransactionList =
       new ArrayList<>(TRANSACTION_HASH_SIZE);
@@ -35,8 +37,9 @@ public class TransactionManager {
     }
   }
 
-  public void init(String workload) {
+  public void init(String workload, StatisticsWorker statisticsWorker) {
     this.workload = workload;
+    this.statisticsWorker = statisticsWorker;
   }
 
   public void read(Transaction transaction, ValidationMeta validationMeta) {
@@ -55,7 +58,7 @@ public class TransactionManager {
     boolean hybridTransaction = transaction.getParticipants().size() > 1;
 
     for (Participant p : transaction.getParticipants()) {
-      //      p.validate(transaction);
+      // p.validate(transaction);
       p.setValidationStatus(ValidationStatus.VALIDATED);
 
       // serial execution
@@ -104,14 +107,17 @@ public class TransactionManager {
             prepare.execute();
           }
         } catch (SQLException ex) {
-          logger.error("Commit failed !!!", ex);
+          if (p.getStatus() == TransactionStatus.PREPARED) {
+            logger.error("Commit failed !!!", ex);
+          }
           results[p.getIsolationLevel()].setException(ex);
         }
       } else {
         logger.error("Cannot find the connection");
       }
 
-      //      p.doAfterCommit(transaction);
+      statisticsWorker.recordTransaction(transaction, true);
+      // p.doAfterCommit(transaction);
     }
   }
 
@@ -147,7 +153,7 @@ public class TransactionManager {
         logger.error("Cannot find the connection");
       }
 
-      //      p.doAfterRollback(transaction);
+      // p.doAfterRollback(transaction);
     }
   }
 

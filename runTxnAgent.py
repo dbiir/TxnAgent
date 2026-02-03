@@ -7,23 +7,22 @@ import sys
 import subprocess
 import signal
 import json
-import numpy as np
+# import numpy as np
 
-prefix_cmd_local = "java -jar target/txnSailsServer-1.0-SNAPSHOT-fat.jar"
-prefix_cmd_remote_java = "java -cp target/tristar/tristar/lib/ -jar target/tristar/tristar/tristar.jar "
-remote_client_dir = "/data/workspace/tristar/"
+prefix_cmd_java_server = "java -jar build/libs/TxnSailsServer-fat-2.0-all.jar"  # local
+prefix_cmd_java_client = "java -cp target/tristar/tristar/lib/ -jar target/tristar/tristar/tristar.jar "
+remote_client_dir = "/data/TriStar/"
 # "-b tpcc -c config/postgres/sample_tpcc_config.xml --execute=true"
 result_prefix = "results/"
 meta_prefix = "metas/"
 # TODO: check the path in the remote server
-config_prefix = "/data/workspace/txnSailsServer/config/" 
 workloads = ["ycsb", "tpcc", "smallbank"]
 engines = ["postgresql"]
 functions = ["scalability", "hotspot-128","skew-128", "wc_ratio-256",
             "bal_ratio-128", "wc_ratio-128", "random-128", "no_ratio-128", "pa_ratio-128",
              "wr_ratio-128", "dynamic-128", "switch-128"]
 strategies = ["SERIALIZABLE", "SI_TAILOR", "RC_TAILOR"]
-remote_machine_ip = "21.6.68.184"
+remote_machine_ip = "worker-128"
 
 
 def run_shell_command(cmd: str, timeout):
@@ -88,48 +87,99 @@ def parse_args():
                         help="specify the workload")
     parser.add_argument("-n", "--cnt", dest="cnt", type=int, required=False, default=1,
                         help="count of execution")
-    parser.add_argument("-p", "--phase", dest="phase", type=str, required=True, default="offline",
-                        help="online predict or offline training")
-
+    
     return parser.parse_args()
 
 
-def run_once(f: str, online: bool):
-    phase: str = "offline"
-    process: subprocess.Popen = None
+def gen_docker_cmd(docker_name: str, cmd:str, path: str = None):
+    escaped_cmd = cmd.replace('"', '\\"')
     
-    if online:
-        phase = "online"
+    if path:
+        docker_cmd = f'docker exec {docker_name} sh -c "source ~/.bashrc && cd {path} && {escaped_cmd}"'
+    else:
+        docker_cmd = f'docker exec {docker_name} sh -c "source ~/.bashrc && {escaped_cmd}"'
+    
+    return docker_cmd
+
+def gen_remote_cmd(remote_ip: str, cmd:str):
+    escaped_cmd = cmd.replace('"', '\\"')
+    
+    return "ssh " + remote_ip + " \"" + escaped_cmd + "\""
+
+
+def get_config_files(func: str, engine: str) -> list[str]:
+    container_name = "txncompass_client"
+    config_path = "/data/TriStar"
+    remote_machine_ip = "worker-128"
+    
+    cmd1 = gen_docker_cmd(container_name, "find /data/TriStar/config/ycsb/" + func + "/" + engine + " -type f", config_path)
+
+    import subprocess
+    remote_cmd = gen_remote_cmd(remote_machine_ip, cmd1)
+    result = subprocess.run(remote_cmd, shell=True, capture_output=True, text=True)
+    # print(f"file list:\n{result.stdout}")
+    file_list = result.stdout.split("\n")
+    file_list.sort()
+    return file_list
+
+
+def run_once(f: str):
+    process: subprocess.Popen = None
+
     # traverse the dir
-    config_path = "config/" + args.wl + "/" + f + "/" + args.engine + "/"
     config_path_local = "config/" + args.wl + ".xml"
     schema_path_local = "config/" + args.wl + ".sql"
+    
+    config_path = "config/" + args.wl + "/" + f + "/" + args.engine + "/"
     print("config_path: " + config_path)
     unique_ts = datetime.now().strftime('%Y-%m-%d-%H-%M-%S')
-    for conf_file in traverse_dir(config_path):
-        if online:
-            process = subprocess.Popen("python3 adapter.py -w " + args.wl, shell=True, preexec_fn=os.setsid)
-            time.sleep(5)
-        meta_dir = meta_prefix + args.wl + "/" + f + "/" + unique_ts + "/"
+    
+    for conf_file in get_config_files(f, args.engine):
+        if conf_file.strip() == "":
+            continue
+        # if online:
+        #     process = subprocess.Popen("python3 adapter.py -w " + args.wl, shell=True, preexec_fn=os.setsid)
+        #     time.sleep(5)
+        # meta_dir = meta_prefix + args.wl + "/" + f + "/" + unique_ts + "/"
         result_dir = result_prefix + args.wl + "/" + f + "/" + unique_ts + "/"
         case_name = os.path.splitext(os.path.basename(conf_file))[0]
         output_file_path = result_dir + case_name + "/stdout.log"
         print("Run config - { " + case_name + " }")
+        cc_name = case_name.split("_cc_")[-1]
         # 1. start txnSails server in this server
-        java_cmd = prefix_cmd_local + " -c " + config_path_local + " -s " + schema_path_local + " -d " + result_dir + case_name + " -p " + phase
-        process = subprocess.Popen(java_cmd, shell=True, preexec_fn=os.setsid)
-        time.sleep(5)
+        # java -jar build/libs/TxnSailsServer-fat-2.0-all.jar -s config/ycsb.sql -c config/ycsb.xml
+        if cc_name == "FS":
+            server_output_file_path = "logs/" + args.wl + "/" + f + "/" + unique_ts + "/" + case_name
+            mkdir_cmd_server = "mkdir -p " + server_output_file_path
+            server_output_file = server_output_file_path + "/stdout.log"
+            docker_mkdir_cmd_server = gen_docker_cmd("txncompass_server", mkdir_cmd_server, "/data/TxnSailsServer")
+            run_shell_command(docker_mkdir_cmd_server, 10)          
+            java_cmd = prefix_cmd_java_server + " -c " + config_path_local + " -s " + schema_path_local + " -d " + result_dir + case_name + " -t config/partition/ycsb/partition-2.yaml -p offline > " + server_output_file + " 2>&1"
+            server_docker_cmd = gen_docker_cmd("txncompass_server", java_cmd, "/data/TxnSailsServer")
+            
+            process = subprocess.Popen(server_docker_cmd, shell=True, preexec_fn=os.setsid)
+            time.sleep(15)
+        elif cc_name == "SER":
+            pass
+        else:
+            print("Unsupported CC: " + cc_name)
+            continue
+        
         # 1. create the remote directory
-        remote_cmd = "ssh " + remote_machine_ip + " \"mkdir -p " + remote_client_dir + result_dir + case_name + "\" "
-        run_shell_command(remote_cmd, 10)
-        cmd_remote_java = prefix_cmd_remote_java + " -b " + args.wl + " -c " + config_path + case_name + ".xml" + \
-            " --execute=true -d " + result_dir + case_name + " -p " + phase + " > " + output_file_path
-        remote_cmd = "ssh " + remote_machine_ip + " \"cd " + remote_client_dir + " ; " + cmd_remote_java + "\""
-        run_shell_command(remote_cmd, 240)
+        mkdir_cmd = "mkdir -p " + remote_client_dir + result_dir + case_name
+        docker_mkdir_cmd = gen_docker_cmd("txncompass_client", mkdir_cmd, "/data/TriStar")
+        remote_docker_mkdir_cmd = gen_remote_cmd(remote_machine_ip, docker_mkdir_cmd)
+        run_shell_command(remote_docker_mkdir_cmd, 10)
+        
+        client_cmd = prefix_cmd_java_client + " -b " + args.wl + " -c " + config_path + case_name + ".xml" + \
+            " --execute=true -d " + result_dir + case_name + " > " + output_file_path
+        docker_client_cmd = gen_docker_cmd("txncompass_client", client_cmd, "/data/TriStar")
+        remote_docker_client_cmd = gen_remote_cmd(remote_machine_ip, docker_client_cmd)
+        run_shell_command(remote_docker_client_cmd, 240)
         print("Finish config - { " + case_name + " }")
-        # time.sleep(5)
+        time.sleep(5)
         # refresh_output_channel()
-        if online:
+        if cc_name == "FS":
             if process is not None:
                 try:
                     process.communicate(timeout=240)
@@ -139,9 +189,6 @@ def run_once(f: str, online: bool):
                     process.communicate()
             else:
                 print("process is None")
-
-    if not online: # generate label
-        preprocess_labels(f, unique_ts)
 
     time.sleep(5)
     return unique_ts
@@ -199,10 +246,10 @@ def generate_offline_labels(meta_folder: str):
         os.remove(file)
 
 
-def run_cnt(f: str, online: bool, cnt: int):
+def run_cnt(f: str, cnt: int):
     timestamps = []
     for i in range(cnt):
-        ts = run_once(f, online)
+        ts = run_once(f)
         timestamps.append(ts)
     return timestamps
 
@@ -211,21 +258,12 @@ if __name__ == "__main__":
     args = parse_args()
     start_time = datetime.now()
     print("workload: " + args.wl + " engine: " + args.engine + " cnt: " + str(args.cnt))
-    online_predict = False
-    if args.phase == "online":
-        online_predict = True
     ff = functions
     if args.func is not None:
         ff = args.func
 
     for f in ff:
-        tss = run_cnt(f, online_predict, args.cnt)
-
-        if not online_predict and f == "random-128":
-            offline_service = OfflineService(args.wl)
-            print(f, meta_prefix + "/" + args.wl, tss)
-            offline_service.service("train", f, meta_prefix + "/" + args.wl, tss)
-            print("success")
+        tss = run_cnt(f, args.cnt)
 
     print("start time: ", start_time)
     print("end time: ", datetime.now())

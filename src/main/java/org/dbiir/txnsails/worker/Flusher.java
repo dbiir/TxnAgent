@@ -58,20 +58,7 @@ public class Flusher implements Runnable {
       return;
     }
     long start_ts = System.currentTimeMillis();
-    boolean a = false, b = false, c = false;
     while (!Thread.currentThread().isInterrupted()) {
-      if (System.currentTimeMillis() - start_ts > 15000 && !a) {
-        Adapter.getInstance().setNextCCType("1");
-        a = true;
-      }
-      if (System.currentTimeMillis() - start_ts > 20000 && !b) {
-        Adapter.getInstance().setNextCCType("2");
-        b = true;
-      }
-      if (System.currentTimeMillis() - start_ts > 25000 && !c) {
-        Adapter.getInstance().setNextCCType("0");
-        c = true;
-      }
       if (TransactionCollector.getInstance().isNeedFlush() && needFlush(ccType)) {
         long timestamp = System.currentTimeMillis();
         String fileName = outputFilePrefix + "sample_" + timestamp;
