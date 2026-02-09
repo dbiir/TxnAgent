@@ -6,8 +6,7 @@ from typing import List, Dict, Tuple, Optional
 from collections import defaultdict
 import torch.nn.functional as F
 from torch_geometric.nn import GINEConv
-from torch_geometric.data import Data
-from torch_geometric.loader import DataLoader
+from torch_geometric.nn import global_mean_pool
 
 class GraphEmbeddingModel(nn.Module):
     """
@@ -30,7 +29,7 @@ class GraphEmbeddingModel(nn.Module):
         hidden_dim: int = 256,
         output_dim: int = 128,
         num_layers: int = 3,
-        dropout = 0.1,
+        dropout = 0.01,
     ):
         super().__init__()
         
@@ -73,7 +72,7 @@ class GraphEmbeddingModel(nn.Module):
             nn.Linear(16, 1)  # Predict performance score
         )
 
-    def forward(self, x, edge_index, edge_attr):
+    def forward(self, x, edge_index, edge_attr, batch):
         """
         Forward pass of the local graph embedding model.
         
@@ -97,8 +96,10 @@ class GraphEmbeddingModel(nn.Module):
         
         h_out = self.output_norm(h_local)
         h_out = F.relu(self.output_proj(h_out))
+        
+        graph_emb = global_mean_pool(h_out, batch)
 
-        performance = self.performance_predictor(h_out)
+        performance = self.performance_predictor(graph_emb).squeeze(-1)
         
         return h_out, performance
     

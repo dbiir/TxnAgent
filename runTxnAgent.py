@@ -87,23 +87,23 @@ def parse_args():
                         help="specify the workload")
     parser.add_argument("-n", "--cnt", dest="cnt", type=int, required=False, default=1,
                         help="count of execution")
-    
+
     return parser.parse_args()
 
 
 def gen_docker_cmd(docker_name: str, cmd:str, path: str = None):
     escaped_cmd = cmd.replace('"', '\\"')
-    
+
     if path:
         docker_cmd = f'docker exec {docker_name} sh -c "source ~/.bashrc && cd {path} && {escaped_cmd}"'
     else:
         docker_cmd = f'docker exec {docker_name} sh -c "source ~/.bashrc && {escaped_cmd}"'
-    
+
     return docker_cmd
 
 def gen_remote_cmd(remote_ip: str, cmd:str):
     escaped_cmd = cmd.replace('"', '\\"')
-    
+
     return "ssh " + remote_ip + " \"" + escaped_cmd + "\""
 
 
@@ -111,7 +111,7 @@ def get_config_files(func: str, engine: str) -> list[str]:
     container_name = "txncompass_client"
     config_path = "/data/TriStar"
     remote_machine_ip = "worker-128"
-    
+
     cmd1 = gen_docker_cmd(container_name, "find /data/TriStar/config/ycsb/" + func + "/" + engine + " -type f", config_path)
 
     import subprocess
@@ -129,11 +129,11 @@ def run_once(f: str):
     # traverse the dir
     config_path_local = "config/" + args.wl + ".xml"
     schema_path_local = "config/" + args.wl + ".sql"
-    
+
     config_path = "config/" + args.wl + "/" + f + "/" + args.engine + "/"
     print("config_path: " + config_path)
     unique_ts = datetime.now().strftime('%Y-%m-%d-%H-%M-%S')
-    
+
     for conf_file in get_config_files(f, args.engine):
         if conf_file.strip() == "":
             continue
@@ -153,10 +153,10 @@ def run_once(f: str):
             mkdir_cmd_server = "mkdir -p " + server_output_file_path
             server_output_file = server_output_file_path + "/stdout.log"
             docker_mkdir_cmd_server = gen_docker_cmd("txncompass_server", mkdir_cmd_server, "/data/TxnSailsServer")
-            run_shell_command(docker_mkdir_cmd_server, 10)          
+            run_shell_command(docker_mkdir_cmd_server, 10)
             java_cmd = prefix_cmd_java_server + " -c " + config_path_local + " -s " + schema_path_local + " -d " + result_dir + case_name + " -t config/partition/ycsb/partition-2.yaml -p offline > " + server_output_file + " 2>&1"
             server_docker_cmd = gen_docker_cmd("txncompass_server", java_cmd, "/data/TxnSailsServer")
-            
+
             process = subprocess.Popen(server_docker_cmd, shell=True, preexec_fn=os.setsid)
             time.sleep(15)
         elif cc_name == "SER":
@@ -164,13 +164,13 @@ def run_once(f: str):
         else:
             print("Unsupported CC: " + cc_name)
             continue
-        
+
         # 1. create the remote directory
         mkdir_cmd = "mkdir -p " + remote_client_dir + result_dir + case_name
         docker_mkdir_cmd = gen_docker_cmd("txncompass_client", mkdir_cmd, "/data/TriStar")
         remote_docker_mkdir_cmd = gen_remote_cmd(remote_machine_ip, docker_mkdir_cmd)
         run_shell_command(remote_docker_mkdir_cmd, 10)
-        
+
         client_cmd = prefix_cmd_java_client + " -b " + args.wl + " -c " + config_path + case_name + ".xml" + \
             " --execute=true -d " + result_dir + case_name + " > " + output_file_path
         docker_client_cmd = gen_docker_cmd("txncompass_client", client_cmd, "/data/TriStar")

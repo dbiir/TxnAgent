@@ -8,7 +8,7 @@ plugins {
     id("com.github.ben-manes.versions") version "0.53.0"
 }
 
-group = 'org.dbiir.txnsails'
+group = 'org.dbiir.txnagent'
 version = '2.0'
 description = 'TxnSailsServer'
 
@@ -18,7 +18,7 @@ java {
 }
 
 application {
-    mainClass = 'org.dbiir.txnsails.TxnSailsServer'
+    mainClass = 'org.dbiir.txnagent.TxnSailsServer'
 }
 
 repositories {

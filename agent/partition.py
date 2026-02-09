@@ -1,9 +1,6 @@
 import torch
-import torch.nn as nn
 import numpy as np
 from typing import List, Dict, Tuple, Optional
-from collections import defaultdict
-import torch.nn.functional as F
 
 
 class PartitionNode:
@@ -12,7 +9,6 @@ class PartitionNode:
         self.p_id = p_id # macro partition id
         self.isolation_level = isolation_level  # 0:SER, 1:SI, 2:RC
         self.mu = mu  # parameter for timestamp interval adjustment
-        self.workload_intensity = 0.0
         self.key_range_start = key_range_start
         self.capacity = capacity
         if capacity % 8 != 0 or key_range_start % capacity != 0:
@@ -31,7 +27,7 @@ class PartitionNode:
         self.capacity_per_micro_partition = capacity / self.max_micro_partitions
         self.p_start = self.key_range_start % (self.max_micro_partitions * self.capacity_per_micro_partition) // self.capacity_per_micro_partition;
         self.p_end = self.p_start + self.max_micro_partitions // np.power(2, self.level_from_top - 1)
-        self.micro_partition_features = torch.randn(self.max_micro_partitions, 4)  # [write/read ratio, w_contention, r_contention, anomaly count]
+        self.micro_partition_features = torch.randn(self.max_micro_partitions, 4)  # [write/read ratio, abort_rate, workload_intensive, isolation_level]
 
     def get_node_features(self) -> torch.Tensor:
         """Get node feature vector by aggregating micro-partition features"""
@@ -46,10 +42,9 @@ class PartitionNode:
         micro idx: the offset of micro-partition in the partition
         Update features of a specific micro-partition
         """
-        if micro_idx > self.max_micro_partitions or len(features) != 5:
+        if micro_idx > self.max_micro_partitions or len(features) != 4:
             raise ValueError("Invalid micro-partition index or feature length")
-        self.micro_partition_features[micro_idx] = torch.tensor(features[:4])
-        self.workload_intensity += features[4]
+        self.micro_partition_features[micro_idx] = torch.tensor(features)
         if self.is_leaf:
             return
         
@@ -63,12 +58,7 @@ class PartitionNode:
         """Update the current embedding and store the previous one"""
         self.previous_embedding = self.current_embedding
         self.current_embedding = embedding
-        
-    def get_workload_intensity(self) -> float:
-        """Calculate overall workload intensity of the partition by average"""
-        p_cnt = self.max_micro_partitions / np.power(2, self.level_from_top - 1)
-        return self.workload_intensity / p_cnt
-    
+
     def find_leaf_partition(self, micro_idx: int):
         """Find the leaf partition node that includes the specified micro-partition index"""
         if self.is_leaf:
@@ -114,41 +104,14 @@ class PartitionNode:
             self.father.can_merge = False        
 
 
-class PartitionGraph:
-    """Partition graph structure representing relationships between partitions"""
-    def __init__(self):
-        self.nodes: Dict[int, PartitionNode] = {}
-        self.edges: Dict[Tuple[int, int], int] = {}  # Edge weights: distributed transaction counts
+    def merge(self):
+        if not self.can_merge:
+            print("Error: cannot merge non-mergeable partition")
+            return
         
-    def add_partition(self, partition: PartitionNode):
-        """Add partition node to graph"""
-        self.nodes[partition.p_id] = partition
+        self.is_leaf = True
+        if self.father is not None:
+            self.father.can_merge = True
         
-    def add_edge(self, partition_i: int, partition_j: int, transaction_count: int = 0):
-        """Add undirected edge between partitions"""
-        edge_key = tuple(sorted((partition_i, partition_j)))
-        self.edges[edge_key] = transaction_count
-        
-    def get_adjacency_matrix(self) -> torch.Tensor:
-        """Get normalized adjacency matrix"""
-        n_nodes = len(self.nodes)
-        adj_matrix = torch.zeros(n_nodes, n_nodes)
-        
-        node_ids = sorted(self.nodes.keys())
-        id_to_idx = {node_id: idx for idx, node_id in enumerate(node_ids)}
-        
-        # Build adjacency matrix with edge weights
-        for (i, j), weight in self.edges.items():
-            idx_i, idx_j = id_to_idx[i], id_to_idx[j]
-            adj_matrix[idx_i, idx_j] = weight
-            adj_matrix[idx_j, idx_i] = weight  # Undirected graph
-            
-        return adj_matrix
-    
-    def get_node_feature_matrix(self) -> torch.Tensor:
-        """Get node feature matrix for all partitions"""
-        node_ids = sorted(self.nodes.keys())
-        features = []
-        for node_id in node_ids:
-            features.append(self.nodes[node_id].get_node_features())
-        return torch.stack(features)
+        self.left = None
+        self.right = None

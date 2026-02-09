@@ -3,8 +3,7 @@ import argparse
 import signal
 import socket
 
-from isolation_adapter.services.offline import OfflineService
-from isolation_adapter.services.online import OnlineService
+from agent.agent import TxnAgent
 
 server_sockets: list[socket.socket] = []
 client_sockets: list[socket.socket] = []
@@ -44,13 +43,20 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("-w", "--workload", dest='wl', choices=workloads, type=str, required=True,
                         help="specify the workload")
+    parser.add_argument("-f", "--filepath", dest='fp', type=str, required=False,
+                        help="file path for offline training data")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    online_service = OnlineService(args.wl)
-    offline_service = OfflineService(args.wl)
+    txn_service = TxnAgent() 
+
+    if args.fp:
+        print(f"Offline training data path: {args.fp}", flush=True)
+        txn_service.embedding_train_offline(args.fp)
+        exit(0)
+
     server_socket = prepare_for_connect()
     server_sockets.append(server_socket)
 
@@ -66,15 +72,13 @@ if __name__ == "__main__":
             break
         print('Received message:', data, flush=True)
         variables: list[str] = data.split(",")
-        if variables[0].lower() == "online":
-            res = online_service.service(variables[1], variables[2].strip())
-            reply = str(res) + "\n"
-            client_socket.sendall(reply.encode('utf-8'))
-            print('Reply:', reply, flush=True)
-        elif variables[0].lower() == "offline":
-            offline_service.service(variables[1], variables[2])
-            reply = 'Train Finished!'
-            client_socket.sendall(reply.encode('utf-8'))
+        if variables[0] == "online":
+            filename = variables[1]
+            response: str = txn_service.service(filename, args.wl)
+            client_socket.sendall(response.encode("utf-8"))
+        else:
+            print("Unknown command:", variables[0], flush=True)
+            client_socket.sendall("error: unknown command".encode("utf-8"))
 
     # Close the connection
     close_service(server_sockets, client_sockets)
