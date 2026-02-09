@@ -12,7 +12,6 @@ public class Transaction {
   @Getter private final List<Participant> participants;
   @Getter @Setter private long lowerBound;
   @Getter @Setter private long upperBound;
-  @Getter @Setter private boolean prepared;
   @Getter @Setter private TransactionStatus status;
   private final SpinLock lock;
   @Getter @Setter private long commitTimestamp;
@@ -23,7 +22,7 @@ public class Transaction {
     this.lowerBound = System.currentTimeMillis();
     this.upperBound = Long.MAX_VALUE;
     this.lock = new SpinLock();
-    this.status = TransactionStatus.ACTIVE;
+    this.status = TransactionStatus.IDLE;
   }
 
   public Transaction(long tid) {
@@ -31,6 +30,7 @@ public class Transaction {
     this.participants = new LinkedList<>();
     this.lowerBound = System.currentTimeMillis();
     this.upperBound = Long.MAX_VALUE;
+    this.status = TransactionStatus.IDLE;
     this.lock = new SpinLock();
   }
 

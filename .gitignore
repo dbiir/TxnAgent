@@ -43,8 +43,10 @@ venv/
 ### GRADLE ###
 .gradle/
 
-### TXNSAILS ###
+### TXNAGENT ###
 config/
 metas/
 adapter.log
 test_function.py
+logs/
+bin/

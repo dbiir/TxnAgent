@@ -4,7 +4,7 @@
     <!-- Connection details -->
     <type>POSTGRES</type>
     <driver>org.postgresql.Driver</driver>
-    <url>jdbc:postgresql://localhost:5432/ycsb?sslmode=disable&amp;ApplicationName=smallbank&amp;reWriteBatchedInserts=true</url>
+    <url>jdbc:postgresql://localhost:5432/tpcc?sslmode=disable&amp;ApplicationName=smallbank&amp;reWriteBatchedInserts=true</url>
     <username>zqy</username>
     <password>Ss123!@#</password>
     <reconnectOnConnectionFailure>true</reconnectOnConnectionFailure>
