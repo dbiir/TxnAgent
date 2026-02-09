@@ -255,30 +255,6 @@ public class PartitionManager {
     return item;
   }
 
-  public DataItem getAndAddDataItem(ValidationMeta validationMeta, long timestamp) {
-    int bucketNum =
-        validationMeta.getIdForValidation()
-            % getHashSizeByRelationName(validationMeta.getRelationName());
-    ReadWriteLock lock = tableToDataItemGuards.get(validationMeta.getRelationName()).get(bucketNum);
-    lock.readLock().lock();
-    for (DataItem item : tableToDataItems.get((validationMeta.getRelationName())).get(bucketNum)) {
-      if (item.getKey() == validationMeta.getIdForValidation()) {
-        item.clearVersions(timestamp);
-        lock.readLock().unlock();
-        return item;
-      }
-    }
-    lock.readLock().unlock();
-    int partitionId = getPartitionId(validationMeta);
-    lock.writeLock().lock();
-    DataItem item =
-        new DataItem(
-            validationMeta.getIdForValidation(), partitionId, validationMeta.getRelationName());
-    tableToDataItems.get((validationMeta.getRelationName())).get(bucketNum).add(item);
-    lock.writeLock().unlock();
-    return item;
-  }
-
   private int getHashSizeByRelationName(String relationName) {
     return switch (this.workload) {
       case "ycsb" -> YCSBConstants.getHashSize(relationName);

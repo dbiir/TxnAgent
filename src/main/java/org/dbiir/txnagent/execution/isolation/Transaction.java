@@ -67,4 +67,43 @@ public class Transaction {
     }
     return true;
   }
+
+  public void doAfterCommit(long minActiveTransactionId) {
+    this.status = TransactionStatus.COMMITTED;
+    for (Participant participant : this.participants) {
+      // write set
+      int itemCount = participant.getWriteSet().getItemCount();
+      for (int i = 0; i < itemCount; i++) {
+        DataItem dataItem = participant.getWriteSet().get(i).getDataItem();
+        dataItem.installVersion(
+                participant.getWriteSet().get(i).getOldVersion(), commitTimestamp, minActiveTransactionId);
+        dataItem.setMaxReadTimestamp(commitTimestamp);
+        dataItem.releaseWriteLock(commitTimestamp);
+      }
+
+      // read set
+      itemCount = participant.getReadSet().getItemCount();
+      for (int i = 0; i < itemCount; i++) {
+        participant.getReadSet().get(i).getDataItem().removeReadTransaction(this);
+      }
+    }
+  }
+
+  public void doAfterRollback() {
+    for (Participant participant : participants) {
+      // write set
+      int itemCount = participant.getWriteSet().getItemCount();
+      for (int i = 0; i < itemCount; i++) {
+        DataItem dataItem = participant.getWriteSet().get(i).getDataItem();
+        dataItem.setMaxReadTimestamp(commitTimestamp);
+        dataItem.releaseWriteLock(id);
+      }
+      // read set
+      itemCount = participant.getReadSet().getItemCount();
+      for (int i = 0; i < itemCount; i++) {
+        // atomic remove transaction from read transaction list
+        participant.getReadSet().get(i).getDataItem().removeReadTransaction(this);
+      }
+    }
+  }
 }

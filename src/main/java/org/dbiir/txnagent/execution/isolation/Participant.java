@@ -75,45 +75,6 @@ public class Participant {
     validationStatus = ValidationStatus.VALIDATED;
   }
 
-  public void doAfterCommit(Transaction transaction) {
-    for (Participant participant : transaction.getParticipants()) {
-      // write set
-      int itemCount = participant.getWriteSet().getItemCount();
-      for (int i = 0; i < itemCount; i++) {
-        DataItem dataItem = participant.getWriteSet().get(i).getDataItem();
-        dataItem.installVersion(
-            participant.getWriteSet().get(i).getOldVersion(), transaction.getCommitTimestamp());
-        dataItem.setMaxReadTimestamp(transaction.getCommitTimestamp());
-        dataItem.releaseWriteLock(transaction.getId());
-      }
-
-      // read set
-      itemCount = participant.getReadSet().getItemCount();
-      for (int i = 0; i < itemCount; i++) {
-        DataItem dataItem = participant.getReadSet().get(i).getDataItem();
-        participant.getReadSet().get(i).getDataItem().removeReadTransaction(transaction);
-      }
-    }
-  }
-
-  public void doAfterRollback(Transaction transaction) {
-    for (Participant participant : transaction.getParticipants()) {
-      // write set
-      int itemCount = participant.getWriteSet().getItemCount();
-      for (int i = 0; i < itemCount; i++) {
-        DataItem dataItem = participant.getWriteSet().get(i).getDataItem();
-        dataItem.setMaxReadTimestamp(transaction.getCommitTimestamp());
-        dataItem.releaseWriteLock(transaction.getId());
-      }
-      // read set
-      itemCount = participant.getReadSet().getItemCount();
-      for (int i = 0; i < itemCount; i++) {
-        // atomic remove transaction from read transaction list
-        participant.getReadSet().get(i).getDataItem().removeReadTransaction(transaction);
-      }
-    }
-  }
-
   private void adjustTimestamp(Transaction t_i, DataItem dataItem) {
     logger.debug("adjustTimestamp: t_i={}, dataItem={}", t_i.getId(), dataItem.getKey());
     dataItem.acquireReadLock();

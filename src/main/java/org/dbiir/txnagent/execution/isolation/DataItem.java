@@ -122,12 +122,10 @@ public class DataItem {
         && this.writeTransaction.get() == 0;
   }
 
-  public void installVersion(long version, long commitTimestamp) {
+  public void installVersion(long version, long commitTimestamp, long minActiveTransactionId) {
     this.versions.add(new RecordVersion(version, commitTimestamp));
-  }
-
-  public void clearVersions(long timestamp) {
-    // remove all versions whose timestamp is greater than the given timestamp from the second
-    versions.subList(0, versions.size() - 1).removeIf(rv -> rv.timestamp() < timestamp);
+    if (this.versions.size() > 8) {
+      this.versions.removeIf(rv -> rv.timestamp() < minActiveTransactionId);
+    }
   }
 }

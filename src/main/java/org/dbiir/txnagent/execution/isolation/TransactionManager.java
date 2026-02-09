@@ -49,9 +49,7 @@ public class TransactionManager {
   }
 
   public void write(Transaction transaction, ValidationMeta validationMeta) {
-    DataItem item =
-        PartitionManager.getInstance()
-            .getAndAddDataItem(validationMeta, getMinActiveTransactionId());
+    DataItem item = PartitionManager.getInstance().getAndAddDataItem(validationMeta);
     item.write(transaction);
     validationMeta.setDataItem(item);
   }
@@ -82,6 +80,7 @@ public class TransactionManager {
         }
       }
     }
+    transaction.setCommitTimestamp(transaction.getLowerBound());
   }
 
   public void commit(Transaction transaction, AsyncResultWrapper[] results) {
@@ -118,10 +117,9 @@ public class TransactionManager {
       } else {
         logger.error("Cannot find the connection");
       }
-
-      statisticsWorker.recordTransaction(transaction, true);
-      // p.doAfterCommit(transaction);
     }
+    transaction.doAfterCommit(getMinActiveTransactionId());
+    //      statisticsWorker.recordTransaction(transaction, true);
   }
 
   public void rollback(Transaction transaction, AsyncResultWrapper[] results) {
@@ -155,9 +153,9 @@ public class TransactionManager {
       } else {
         logger.error("Cannot find the connection");
       }
-
-      // p.doAfterRollback(transaction);
     }
+    transaction.doAfterRollback();
+    //      statisticsWorker.recordTransaction(transaction, false);
   }
 
   public void addTransaction(Transaction txn) {
