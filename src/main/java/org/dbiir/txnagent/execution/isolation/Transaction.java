@@ -19,7 +19,7 @@ public class Transaction {
   public Transaction(long tid, List<Participant> participants) {
     this.id = tid;
     this.participants = participants;
-    this.lowerBound = System.currentTimeMillis();
+    this.lowerBound = System.nanoTime();
     this.upperBound = Long.MAX_VALUE;
     this.lock = new SpinLock();
     this.status = TransactionStatus.IDLE;
@@ -28,7 +28,7 @@ public class Transaction {
   public Transaction(long tid) {
     this.id = tid;
     this.participants = new LinkedList<>();
-    this.lowerBound = System.currentTimeMillis();
+    this.lowerBound = System.nanoTime();
     this.upperBound = Long.MAX_VALUE;
     this.status = TransactionStatus.IDLE;
     this.lock = new SpinLock();
@@ -42,7 +42,7 @@ public class Transaction {
   public void init(long tid) {
     this.id = tid;
     this.status = TransactionStatus.ACTIVE;
-    this.lowerBound = System.currentTimeMillis();
+    this.lowerBound = System.nanoTime();
     this.upperBound = Long.MAX_VALUE;
   }
 
@@ -76,9 +76,10 @@ public class Transaction {
       for (int i = 0; i < itemCount; i++) {
         DataItem dataItem = participant.getWriteSet().get(i).getDataItem();
         dataItem.installVersion(
-                participant.getWriteSet().get(i).getOldVersion(), commitTimestamp, minActiveTransactionId);
+            participant.getWriteSet().get(i).getOldVersion(),
+            commitTimestamp,
+            minActiveTransactionId);
         dataItem.setMaxReadTimestamp(commitTimestamp);
-        dataItem.releaseWriteLock(commitTimestamp);
       }
 
       // read set
@@ -91,19 +92,36 @@ public class Transaction {
 
   public void doAfterRollback() {
     for (Participant participant : participants) {
-      // write set
-      int itemCount = participant.getWriteSet().getItemCount();
-      for (int i = 0; i < itemCount; i++) {
-        DataItem dataItem = participant.getWriteSet().get(i).getDataItem();
-        dataItem.setMaxReadTimestamp(commitTimestamp);
-        dataItem.releaseWriteLock(id);
-      }
       // read set
-      itemCount = participant.getReadSet().getItemCount();
+      int itemCount = participant.getReadSet().getItemCount();
       for (int i = 0; i < itemCount; i++) {
         // atomic remove transaction from read transaction list
         participant.getReadSet().get(i).getDataItem().removeReadTransaction(this);
       }
     }
+  }
+
+  public String getReadSetString() {
+    StringBuilder sb = new StringBuilder();
+    for (Participant participant : participants) {
+      int itemCount = participant.getReadSet().getItemCount();
+      for (int i = 0; i < itemCount; i++) {
+        DataItem dataItem = participant.getReadSet().get(i).getDataItem();
+        sb.append(dataItem.getKey()).append(", ");
+      }
+    }
+    return sb.toString().trim();
+  }
+
+  public String getWriteSetString() {
+    StringBuilder sb = new StringBuilder();
+    for (Participant participant : participants) {
+      int itemCount = participant.getWriteSet().getItemCount();
+      for (int i = 0; i < itemCount; i++) {
+        DataItem dataItem = participant.getWriteSet().get(i).getDataItem();
+        sb.append(dataItem.getKey()).append(", ");
+      }
+    }
+    return sb.toString().trim();
   }
 }

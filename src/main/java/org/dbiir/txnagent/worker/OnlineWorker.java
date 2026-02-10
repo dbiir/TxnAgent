@@ -20,7 +20,6 @@ import org.dbiir.txnagent.execution.WorkloadConfiguration;
 import org.dbiir.txnagent.execution.isolation.*;
 import org.dbiir.txnagent.execution.utils.RWRecord;
 import org.dbiir.txnagent.execution.utils.SQLStmt;
-import org.dbiir.txnagent.execution.utils.TransactionIdGenerator;
 import org.dbiir.txnagent.execution.validation.TransactionCollector;
 import org.dbiir.txnagent.execution.validation.ValidationMeta;
 import org.dbiir.txnagent.execution.validation.ValidationMetaTable;
@@ -114,8 +113,7 @@ public class OnlineWorker {
       }
     }
     // init the first transactionID
-    this.transactionId =
-        ((System.nanoTime() << 10) | (Thread.currentThread().threadId() & 0x3ff)) & mask;
+    this.transactionId = ((System.nanoTime() << 10) | (id & 0x3ff)) & mask;
 
     // init sample container
     this.readSet = new ArrayList<>(8);
@@ -143,7 +141,7 @@ public class OnlineWorker {
   }
 
   public void beginFS() {
-    long tid = TransactionIdGenerator.generateTransactionId(id);
+    long tid = ((System.nanoTime() << 10) | (id & 0x3ff)) & mask;
     this.transaction.init(tid);
     TransactionManager.getInstance().addTransaction(this.transaction);
     logger.info("{} transaction #{} begin.", Thread.currentThread().getName(), tid);
@@ -232,7 +230,7 @@ public class OnlineWorker {
       } catch (SQLException ex) {
         // check if the error can retry automatically, in the future
         this.resultList[isolationLevel].setException(ex);
-        logger.error("{} failed to execute sql: {}", this.toString(), executeSQL, ex);
+        logger.info("{} failed to execute sql: {}", this.toString(), executeSQL, ex);
         throw ex;
       }
     }
@@ -449,6 +447,7 @@ public class OnlineWorker {
       return;
     }
     // 2. commit or rollback a transaction
+    logger.info("transaction #{} is committing.", this.transaction.getId());
     TransactionManager.getInstance().commit(this.transaction, this.resultList);
     for (AsyncResultWrapper result : this.resultList) {
       if (!result.isSuccess()) {
@@ -460,6 +459,8 @@ public class OnlineWorker {
         throw new SQLException(result.getException().getMessage(), "500");
       }
     }
+    logger.info("transaction #{} is committed.", this.transaction.getId());
+    transaction.setStatus(TransactionStatus.COMMITTED);
 
     // 3. reset the transaction meta
     resetTransactionMeta();
@@ -470,6 +471,7 @@ public class OnlineWorker {
 
   public void rollbackFS() throws SQLException {
     assert this.transaction.getStatus() != TransactionStatus.PREPARED;
+    logger.info("transaction #{} is rollbacking.", this.transaction.getId());
     TransactionManager.getInstance().rollback(this.transaction, this.resultList);
     for (AsyncResultWrapper result : this.resultList) {
       if (!result.isSuccess()) {
@@ -481,6 +483,8 @@ public class OnlineWorker {
         // reset the connection for this participant
       }
     }
+    logger.info("transaction #{} is rollbacked.", this.transaction.getId());
+    transaction.setStatus(TransactionStatus.ROLLBACK);
 
     // reset the transaction meta
     resetTransactionMeta();

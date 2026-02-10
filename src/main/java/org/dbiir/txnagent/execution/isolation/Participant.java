@@ -78,11 +78,17 @@ public class Participant {
   private void adjustTimestamp(Transaction t_i, DataItem dataItem) {
     logger.debug("adjustTimestamp: t_i={}, dataItem={}", t_i.getId(), dataItem.getKey());
     dataItem.acquireReadLock();
+    logger.info("get read lock for data item {}", dataItem.getKey());
     for (Transaction t_j : dataItem.getReadTransactions()) {
       logger.debug("adjustTimestamp: t_j={}", t_j.getId());
-      // if (t_j.getId() == t_i.getId()) {
-      // continue;
-      // }
+      if (t_j.getId() == t_i.getId()) {
+        logger.warn(
+            "skip self transaction {}, read_set [{}], write_set [{}]",
+            t_j.getId(),
+            t_j.getReadSetString(),
+            t_j.getWriteSetString());
+        continue;
+      }
       // add spinlock to concurrent transaction
       if (t_i.getId() < t_j.getId()) {
         t_i.spinLock();
@@ -93,13 +99,21 @@ public class Participant {
       }
       // wait for validated transaction, and continue the validation
       // use RTS to adjust LB
-      if (t_j.getStatus().equals(TransactionStatus.VALIDATED)
+
+      while (t_j.getStatus().equals(TransactionStatus.VALIDATED)
           || t_j.getStatus().equals(TransactionStatus.PREPARED)) {
-        while (t_j.getStatus().equals(TransactionStatus.VALIDATED)
-            || t_j.getStatus().equals(TransactionStatus.PREPARED)) {
-          Thread.yield();
+        System.out.println(
+            "Transaction "
+                + t_i.getId()
+                + " waits for transaction "
+                + t_j.getId()
+                + ", whose status is "
+                + t_j.getStatus());
+        try {
+          Thread.sleep(1);
+        } catch (InterruptedException e) {
+          e.printStackTrace();
         }
-        continue;
       }
 
       int mu =
@@ -115,6 +129,7 @@ public class Participant {
       t_j.spinUnlock();
     }
     dataItem.releaseReadLock();
+    logger.info("release read lock for data item {}", dataItem.getKey());
   }
 
   public boolean readOnly() {

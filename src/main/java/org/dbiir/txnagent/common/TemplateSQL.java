@@ -94,10 +94,11 @@ public class TemplateSQL implements Cloneable {
   }
 
   public String getSQL() {
-    if (needRewriteUnderRC || needRewriteUnderSI) {
-      return rewriteSQL;
-    }
-    return originSQL;
+//    if (needRewriteUnderRC || needRewriteUnderSI) {
+//      return rewriteSQL;
+//    }
+//    return originSQL;
+    return rewriteSQL;
   }
 
   private String getSQLUnderRC() {

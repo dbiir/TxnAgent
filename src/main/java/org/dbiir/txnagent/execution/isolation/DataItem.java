@@ -15,8 +15,6 @@ public class DataItem {
   private static final Logger logger = LoggerFactory.getLogger(DataItem.class);
   private static final int LEASE_TIME = 10000; // milliseconds
   @Getter @Setter private int key;
-  @Getter private int readCount;
-  @Getter private int writeCount;
   private long lease;
   private final List<RecordVersion> versions;
   @Getter private int partitionId;
@@ -30,11 +28,11 @@ public class DataItem {
   @Getter private long maxReadTimestamp;
   private final ReadWriteLock lock =
       new ReentrantReadWriteLock(); // support atomic modification of readTransactions
+  private final ReadWriteLock versionLock =
+          new ReentrantReadWriteLock();
 
   public DataItem(int key) {
     this.key = key;
-    this.readCount = 0;
-    this.writeCount = 0;
     this.lease = System.currentTimeMillis() + LEASE_TIME;
     this.versions = new java.util.LinkedList<>();
     this.readTransactions = new java.util.LinkedList<>();
@@ -50,35 +48,26 @@ public class DataItem {
     this.relationName = relationName;
   }
 
-  public int getTotalCount() {
-    return this.readCount + this.writeCount;
-  }
-
-  public void reset() {
-    this.readCount = 0;
-    this.writeCount = 0;
-  }
-
   public void read(Transaction transaction, long version) {
     logger.debug("data item {}, read transaction {}", key, transaction.getId());
     this.lock.writeLock().lock();
     this.readTransactions.add(transaction);
     this.lock.writeLock().unlock();
     // CC - Execution: if there is a new version, T_i's.UB = x_{m+1}.cts - 1
+    versionLock.readLock().lock();
     for (RecordVersion rv : versions) {
       if (rv.version() <= version) {
         continue;
       }
-      transaction.setUpperBound(rv.version() - 1);
+      transaction.setUpperBound(rv.timestamp() - 1);
       break;
     }
-    this.readCount++;
+    versionLock.readLock().unlock();
     this.lease = System.currentTimeMillis() + LEASE_TIME;
   }
 
   public void write(Transaction transaction) {
     logger.debug("data item {}, write transaction {}", key, transaction.getId());
-    this.writeCount++;
     this.lease = System.currentTimeMillis() + LEASE_TIME;
   }
 
@@ -97,7 +86,7 @@ public class DataItem {
   }
 
   public void releaseReadLock() {
-    assert this.lock.writeLock().tryLock();
+    assert !this.lock.writeLock().tryLock();
     this.lock.readLock().unlock();
   }
 
@@ -109,13 +98,6 @@ public class DataItem {
     this.writeTransaction.compareAndSet(tid, 0);
   }
 
-  public void readCommit(Transaction transaction, ValidationMeta meta) {}
-
-  public void writeCommit(Transaction transaction, ValidationMeta meta) {
-
-    this.writeTransaction.set(0);
-  }
-
   public boolean canRemove() {
     return System.currentTimeMillis() > lease
         && this.readTransactions.isEmpty()
@@ -123,9 +105,11 @@ public class DataItem {
   }
 
   public void installVersion(long version, long commitTimestamp, long minActiveTransactionId) {
+    this.versionLock.writeLock().lock();
     this.versions.add(new RecordVersion(version, commitTimestamp));
     if (this.versions.size() > 8) {
       this.versions.removeIf(rv -> rv.timestamp() < minActiveTransactionId);
     }
+    this.versionLock.writeLock().unlock();
   }
 }
