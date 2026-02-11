@@ -45,6 +45,8 @@ def parse_args():
                         help="specify the workload")
     parser.add_argument("-f", "--filepath", dest='fp', type=str, required=False,
                         help="file path for offline training data")
+    parser.add_argument("-p", "--phase", dest='phase', choices=['offline', 'online'], type=str, required=False,
+                        help="specify the phase: offline or online")
     return parser.parse_args()
 
 
@@ -52,11 +54,8 @@ if __name__ == "__main__":
     args = parse_args()
     txn_service = TxnAgent() 
 
-    if args.fp:
-        print(f"Offline training data path: {args.fp}", flush=True)
-        txn_service.embedding_train_offline(args.fp)
-        exit(0)
-
+    if args.phase == "offline":
+        txn_service.offline_train()
     server_socket = prepare_for_connect()
     server_sockets.append(server_socket)
 

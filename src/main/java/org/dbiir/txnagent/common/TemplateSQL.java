@@ -38,6 +38,7 @@ public class TemplateSQL implements Cloneable {
   @Getter private List<ConditionInfo> wherePlaceholders;
   @Getter private List<ConditionInfo> allPlaceholders;
   private boolean selectAllAttr;
+  private boolean postgresql;
 
   public TemplateSQL(int op, String table, String sql) {
     this.op = op;
@@ -203,6 +204,9 @@ public class TemplateSQL implements Cloneable {
   private String modifyUpdateQuery() {
     try {
       // Parse the SQL statement
+      if (!postgresql) {
+        return originSQL;
+      }
       CCJSqlParserManager parserManager = new CCJSqlParserManager();
       Update updateStatement = (Update) parserManager.parse(new StringReader(originSQL));
 

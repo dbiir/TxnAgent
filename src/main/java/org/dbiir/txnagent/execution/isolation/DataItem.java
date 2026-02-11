@@ -106,6 +106,9 @@ public class DataItem {
 
   public void installVersion(long version, long commitTimestamp, long minActiveTransactionId) {
     this.versionLock.writeLock().lock();
+    if (version == 0) {
+      version = this.versions.getLast().version() + 1;
+    }
     this.versions.add(new RecordVersion(version, commitTimestamp));
     if (this.versions.size() > 8) {
       this.versions.removeIf(rv -> rv.timestamp() < minActiveTransactionId);
