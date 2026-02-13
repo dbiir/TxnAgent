@@ -207,7 +207,7 @@ public class OnlineWorker {
             connections[isolationLevel], new SQLStmt(executeSQL), args, offset, templateSQL)) {
 
       try (ResultSet rs = firstUse ? omitBeginStatement(stmtc) : stmtc.executeQuery()) {
-        int v = -1;
+        int v = 0;
         List<List<String>> rows = new ArrayList<>(2);
         while (rs.next()) {
           List<String> row = new ArrayList<>();

@@ -4,7 +4,6 @@ import java.io.*;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
-import java.text.MessageFormat;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -137,7 +136,7 @@ class ClientHandler implements Runnable {
             }
           } catch (SQLException ex) {
             response =
-                MessageFormat.format(
+                String.format(
                     MetaWorker.ERROR_FORMATTER,
                     ex.getMessage().split("\n")[0],
                     ex.getSQLState(),

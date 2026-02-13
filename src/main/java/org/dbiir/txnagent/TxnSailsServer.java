@@ -176,6 +176,53 @@ public class TxnSailsServer {
         "Release postgres transaction, time consuming: " + (endTime - startTime) / 1000 + " us");
   }
 
+  public static void releaseMySQLTransactions() throws ClassNotFoundException, SQLException {
+    long startTime = System.nanoTime();
+    String[] ips = {"127.0.0.1"};
+
+    Class.forName("com.mysql.cj.jdbc.Driver");
+
+    for (String ip : ips) {
+      String url =
+          "jdbc:mysql://"
+              + ip
+              + ":3306/smallbank?serverTimezone=UTC&useSSL=false&allowPublicKeyRetrieval=true&allowMultiQueries=true&pinGlobalTxToPhysicalConnection=true";
+      String username = "zqy";
+      String password = "Ss123!@#";
+      Connection connection = DriverManager.getConnection(url, username, password);
+      Statement statement = connection.createStatement();
+
+      String sql = "XA Recover";
+      ResultSet resultSet = statement.executeQuery(sql);
+      while (resultSet.next()) {
+        System.out.println("formatID=" + resultSet.getString("formatID"));
+        System.out.println("gtrid_length=" + resultSet.getString("gtrid_length"));
+        System.out.println("bqual_length=" + resultSet.getString("bqual_length"));
+        System.out.println("data=" + resultSet.getString("data"));
+        String formatID = resultSet.getString("formatID");
+        int gtrid_length = resultSet.getInt("gtrid_length");
+        int bqual_length = resultSet.getInt("bqual_length");
+        String data = resultSet.getString("data");
+        String gtrid = data.substring(0, gtrid_length);
+        String bqual = data.substring(gtrid_length);
+
+        String xid = "\"" + gtrid + "\",\"" + bqual + "\"," + formatID;
+        sql = "XA ROLLBACK " + xid;
+        System.out.println(sql);
+        Statement stmt = connection.createStatement();
+        stmt.execute(sql);
+        stmt.close();
+      }
+
+      resultSet.close();
+      statement.close();
+      connection.close();
+    }
+    long endTime = System.nanoTime();
+    System.out.println(
+        "Release mysql transaction, time consuming: " + (endTime - startTime) / 1000 + " us");
+  }
+
   public static JacksonXmlConfiguration buildConfiguration(String filename) throws IOException {
     //    String currentPath = System.getProperty("user.dir");
     //    System.out.println("Current working directory: " + currentPath);

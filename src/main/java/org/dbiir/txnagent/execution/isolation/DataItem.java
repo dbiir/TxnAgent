@@ -6,7 +6,6 @@ import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import lombok.Getter;
 import lombok.Setter;
-import org.dbiir.txnagent.execution.validation.ValidationMeta;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -28,8 +27,7 @@ public class DataItem {
   @Getter private long maxReadTimestamp;
   private final ReadWriteLock lock =
       new ReentrantReadWriteLock(); // support atomic modification of readTransactions
-  private final ReadWriteLock versionLock =
-          new ReentrantReadWriteLock();
+  private final ReadWriteLock versionLock = new ReentrantReadWriteLock();
 
   public DataItem(int key) {
     this.key = key;
@@ -46,6 +44,13 @@ public class DataItem {
     this(key);
     this.partitionId = partitionId;
     this.relationName = relationName;
+  }
+
+  public DataItem(int key, int partitionId, String relationName, long version) {
+    this(key);
+    this.partitionId = partitionId;
+    this.relationName = relationName;
+    this.versions.add(new RecordVersion(version, System.nanoTime()));
   }
 
   public void read(Transaction transaction, long version) {
@@ -109,10 +114,10 @@ public class DataItem {
     if (version == 0) {
       version = this.versions.getLast().version() + 1;
     }
-    this.versions.add(new RecordVersion(version, commitTimestamp));
     if (this.versions.size() > 8) {
       this.versions.removeIf(rv -> rv.timestamp() < minActiveTransactionId);
     }
+    this.versions.add(new RecordVersion(version, commitTimestamp));
     this.versionLock.writeLock().unlock();
   }
 }

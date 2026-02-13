@@ -10,59 +10,73 @@ import random
 from agent.partition import PartitionNode
 
 class PPOBuffer:
-    """Experience replay buffer for PPO with parameterized actions"""
-    
-    def __init__(self, capacity: int = 10000):
-        self.capacity = capacity
-        self.states = deque(maxlen=capacity)
-        self.actions = deque(maxlen=capacity)
-        self.rewards = deque(maxlen=capacity)
-        self.next_states = deque(maxlen=capacity)
-        self.log_probs = deque(maxlen=capacity)
-        self.values = deque(maxlen=capacity)
-        self.action_masks = deque(maxlen=capacity)
-        
-    def add(self, state, action, reward, next_state, log_prob, value, action_mask):
-        """Add experience to buffer"""
+    def __init__(self, size, state_dim, device, gamma=0.99, lam=0.95):
+        self.states = []
+        self.actions = []
+        self.rewards = []
+        self.values = []
+        self.log_probs = []
+        self.dones = []
+
+        self.advantages = None
+        self.returns = None
+
+        self.gamma = gamma
+        self.lam = lam
+        self.device = device
+
+    def store(self, state, action, reward, value, log_prob, done):
         self.states.append(state)
         self.actions.append(action)
         self.rewards.append(reward)
-        self.next_states.append(next_state)
-        self.log_probs.append(log_prob)
         self.values.append(value)
-        self.action_masks.append(action_mask)
-    
-    def sample(self, batch_size: int):
-        """Sample random batch from buffer"""
-        if len(self.states) < batch_size:
-            return None
-            
-        indices = random.sample(range(len(self.states)), batch_size)
-        
-        batch = {
-            'states': [self.states[i] for i in indices],
-            'actions': [self.actions[i] for i in indices],
-            'rewards': [self.rewards[i] for i in indices],
-            'next_states': [self.next_states[i] for i in indices],
-            'log_probs': [self.log_probs[i] for i in indices],
-            'values': [self.values[i] for i in indices],
-            'action_masks': [self.action_masks[i] for i in indices],
-        }
-        
-        return batch
-    
+        self.log_probs.append(log_prob)
+        self.dones.append(done)
+
+    def compute_advantages(self, last_value=0):
+        """
+        Compute GAE advantages and returns
+        """
+        values = self.values + [last_value]
+        gae = 0
+        advantages = []
+
+        for t in reversed(range(len(self.rewards))):
+            delta = (
+                self.rewards[t]
+                + self.gamma * values[t + 1] * (1 - self.dones[t])
+                - values[t]
+            )
+
+            gae = delta + self.gamma * self.lam * (1 - self.dones[t]) * gae
+            advantages.insert(0, gae)
+
+        self.advantages = torch.tensor(
+            advantages, dtype=torch.float32, device=self.device
+        )
+
+        self.returns = self.advantages + torch.tensor(
+            self.values, dtype=torch.float32, device=self.device
+        )
+
+        # Normalize advantages (VERY IMPORTANT)
+        self.advantages = (
+            (self.advantages - self.advantages.mean())
+            / (self.advantages.std() + 1e-8)
+        )
+
+    def get(self):
+        return (
+            torch.stack(self.states),
+            torch.tensor(self.actions, device=self.device),
+            self.advantages,
+            self.returns,
+            torch.stack(self.log_probs),
+        )
+
     def clear(self):
-        """Clear buffer"""
-        self.states.clear()
-        self.actions.clear()
-        self.rewards.clear()
-        self.next_states.clear()
-        self.log_probs.clear()
-        self.values.clear()
-        self.action_masks.clear()
-    
-    def __len__(self):
-        return len(self.states)
+        self.__init__(len(self.states), self.states[0].shape[0], self.device)
+
 
 class MultiHeadParameterizedActor(nn.Module):
     """Multi-head actor network that generates both action types and parameters"""
@@ -523,46 +537,3 @@ class CompletePartitionAdjustmentSystem:
             'critic_loss': critic_loss,
             'time_step': self.time_step
         }
-
-# Example usage
-def example_usage():
-    """Demonstrate the complete system"""
-    system = CompletePartitionAdjustmentSystem(K=2)
-    
-    # Create mock partitions
-    partitions = [
-        Partition(1, isolation_level=0, is_leaf=True),
-        Partition(2, isolation_level=1, is_leaf=True),
-        Partition(3, isolation_level=2, is_leaf=False),
-        Partition(4, isolation_level=0, is_leaf=True)
-    ]
-    
-    # Set workload intensities
-    for i, p in enumerate(partitions):
-        p.workload_intensity = 0.1 * (i + 1)
-        if i == 2:  # Make one partition mergeable
-            p.can_merge = True
-            p.left = Partition(5)
-            p.right = Partition(6)
-    
-    # Mock embeddings
-    embeddings = {p.partition_id: torch.randn(32) for p in partitions}
-    
-    # Mock performance metrics
-    current_performance = 1000.0
-    current_correctness = 5.0
-    
-    # Run adjustment cycle
-    results = system.run_complete_cycle(partitions, embeddings, current_performance, current_correctness)
-    
-    print("Adjustment Cycle Results:")
-    print(f"Selected partitions: {results['selected_partitions']}")
-    print(f"Overall reward: {results['overall_reward']:.4f}")
-    print(f"Actor loss: {results.get('actor_loss', 'N/A')}")
-    print(f"Critic loss: {results.get('critic_loss', 'N/A')}")
-    
-    for pid, result in results['adjustment_results'].items():
-        print(f"Partition {pid}: {result['action']} - {'Success' if result['success'] else 'Failed'}")
-
-if __name__ == "__main__":
-    example_usage()

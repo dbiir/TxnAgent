@@ -43,7 +43,7 @@ class TxnAgent:
         self.update_partition_embeddings(graph, node_emb)
         partitions: list[PartitionNode] = [n for n in graph.nodes.values()]
         # select the adjust partition
-        partition_candidates = self.heuristic_selector.topK(partitions, K=3)  # select top-2 partitions to adjust
+        partition_candidates = self.heuristic_selector.topK(partitions, K=1)  # select most valuable partition to adjust
         
         # TODO: to the rl agent for action decision
         
@@ -116,7 +116,7 @@ class TxnAgent:
         best_val = float("inf")
 
         for epoch in range(1, epochs + 1):
-            train_loss = self.train_epoch(model, train_loader, optimizer, device)            )
+            train_loss = self.train_epoch(model, train_loader, optimizer, device)
             val_loss = self.eval_epoch(model, val_loader, device)
 
             print(

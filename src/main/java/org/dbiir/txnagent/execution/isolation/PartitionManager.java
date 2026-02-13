@@ -13,6 +13,7 @@ import org.dbiir.txnagent.common.constants.TPCCConstants;
 import org.dbiir.txnagent.common.constants.YCSBConstants;
 import org.dbiir.txnagent.common.types.IsolationLevelType;
 import org.dbiir.txnagent.execution.validation.ValidationMeta;
+import org.dbiir.txnagent.execution.validation.ValidationMetaTable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -136,7 +137,12 @@ public class PartitionManager {
     for (int i = 0; i < bucketSize; i++) {
       tableToDataItemGuards.get(relationName).add(new ReentrantReadWriteLock());
       LinkedList<DataItem> dataItems = new LinkedList<>();
-      dataItems.add(new DataItem(i, getPartitionId(relationName, i), relationName));
+      dataItems.add(
+          new DataItem(
+              i,
+              getPartitionId(relationName, i),
+              relationName,
+              ValidationMetaTable.getInstance().getHotspotVersion(relationName, i)));
       tableToDataItems.get(relationName).add(dataItems);
     }
   }

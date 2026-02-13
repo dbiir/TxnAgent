@@ -50,9 +50,9 @@ public abstract class SmallBankConstants {
   public static final HashMap<String, Integer> TABLENAME_TO_HASH_SIZE = new HashMap<>(4);
 
   static {
-    TABLENAME_TO_HASH_SIZE.put(TABLENAME_ACCOUNTS, 0);
-    TABLENAME_TO_HASH_SIZE.put(TABLENAME_SAVINGS, 4000000);
-    TABLENAME_TO_HASH_SIZE.put(TABLENAME_CHECKING, 4000000);
+    TABLENAME_TO_HASH_SIZE.put(TABLENAME_ACCOUNTS, 1000000);
+    TABLENAME_TO_HASH_SIZE.put(TABLENAME_SAVINGS, 1000000);
+    TABLENAME_TO_HASH_SIZE.put(TABLENAME_CHECKING, 1000000);
   }
 
   // ----------------------------------------------------------------

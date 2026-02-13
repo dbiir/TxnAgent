@@ -53,11 +53,17 @@ public class ValidationMetaTable {
             continue;
           }
           createLockTable(entry.getKey(), entry.getValue());
-          for (int i = 0; i < LOAD_THREAD; i++) {
-            int index = i;
-            String relationName = entry.getKey();
-            executor.submit(
-                () -> {
+        }
+        for (int i = 0; i < LOAD_THREAD; i++) {
+          int index = i;
+          executor.submit(
+              () -> {
+                for (Map.Entry<String, Integer> entry :
+                    SmallBankConstants.TABLENAME_TO_HASH_SIZE.entrySet()) {
+                  if (entry.getValue() <= 0) {
+                    continue;
+                  }
+                  String relationName = entry.getKey();
                   for (int j = index;
                       j < SmallBankConstants.getHashSize(relationName);
                       j += LOAD_THREAD) {
@@ -73,8 +79,8 @@ public class ValidationMetaTable {
                       throw new RuntimeException(ex);
                     }
                   }
-                });
-          }
+                }
+              });
         }
       }
       case "ycsb" -> {

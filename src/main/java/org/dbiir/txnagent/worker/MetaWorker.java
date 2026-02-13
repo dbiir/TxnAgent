@@ -39,7 +39,7 @@ public class MetaWorker {
   public static int MAX_AVAILABLE_CORES = 1;
 
   // error handling
-  public static final String ERROR_FORMATTER = "ERROR#{0}#{1}#{2}"; // reason, SQLState, vendorCode
+  public static final String ERROR_FORMATTER = "ERROR#%s#%s#%d"; // reason, SQLState, vendorCode
 
   public MetaWorker() {
     globalTemplateTypeGenerator = 1;

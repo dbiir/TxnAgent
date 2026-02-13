@@ -43,15 +43,15 @@ Output: each partition's embedding vector
 
 $\delta t$: time elapsed since execution, $e^{-\delta t}$
 
-### Select top-k partitions with highest scores for adjustment
+### Select the most valuable partition with highest scores for adjustment
 - sort partitions by score $S$ in descending order
-- select top-k partitions as candidates for adjustment
+- select most valuable partition as candidates for adjustment
 
 ## Part III: Adjustment
 For each selected partition, use a PPO model to choose one action and apply it
 
 ### Action
-1. (idx, split, $\emptyset$): [only leaf partitions (isLeaf=true)]
+1. (idx, split, $iso\_l$, $\mu_l$, $iso\_r$, $\mu_r$): [only leaf partitions (isLeaf=true)]
     - split the partition into two child partitions with equal key ranges, inheriting isolation level and $\mu$ from parent
     - add child partitions to adjustment candidate set
     - mark its _isLeaf_ as false; _canMerge_ as true, mark its parent partition's _canMerge_ as false;
@@ -65,11 +65,11 @@ For each selected partition, use a PPO model to choose one action and apply it
 3. (idx, iso, SER/SI/RC): [only leaf partitions (isLeaf=true)]
     - change the isolation level of the partition to the specified level
 
-4. (idx, interval, param): [only leaf partitions (isLeaf=true)]
+4. (idx, interval, $\mu$): [only leaf partitions (isLeaf=true)]
     - adjust the timestamp interval parameter $\mu$ of the partition to the specified value
 
 ### Reward Function
-After adjustment of all selected partitions, clear the adjustment candidate set. Get the reward based on the overall performance.
+After adjustment of all selected partition, clear the adjustment candidate set. Get the reward based on the overall performance.
 We consider the following metrics:
     - Performance improvement $R_p$: $$R_p = \eta_p \frac{P_t - P_0}{P_0} + (1 - \eta_p) \frac{P_t - P_{t-1}}{P_{t-1}}$$
     - Penalty violations of correctness $P_c$: $$P_c = \eta_c \frac{C_t - C_0}{C_0} + (1 - \eta_c) \frac{C_t - C_{t-1}}{C_{t-1}}, C = \sum_{i=1}^{N}c_i$$

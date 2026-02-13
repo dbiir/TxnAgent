@@ -20,7 +20,6 @@ import net.sf.jsqlparser.statement.select.*;
 import net.sf.jsqlparser.statement.update.*;
 import org.dbiir.txnagent.analysis.ColumnInfo;
 import org.dbiir.txnagent.analysis.ConditionInfo;
-import org.dbiir.txnagent.common.constants.YCSBConstants;
 import org.dbiir.txnagent.worker.MetaWorker;
 
 @Getter
@@ -95,10 +94,10 @@ public class TemplateSQL implements Cloneable {
   }
 
   public String getSQL() {
-//    if (needRewriteUnderRC || needRewriteUnderSI) {
-//      return rewriteSQL;
-//    }
-//    return originSQL;
+    //    if (needRewriteUnderRC || needRewriteUnderSI) {
+    //      return rewriteSQL;
+    //    }
+    //    return originSQL;
     return rewriteSQL;
   }
 
@@ -204,9 +203,6 @@ public class TemplateSQL implements Cloneable {
   private String modifyUpdateQuery() {
     try {
       // Parse the SQL statement
-      if (!postgresql) {
-        return originSQL;
-      }
       CCJSqlParserManager parserManager = new CCJSqlParserManager();
       Update updateStatement = (Update) parserManager.parse(new StringReader(originSQL));
 
@@ -231,7 +227,7 @@ public class TemplateSQL implements Cloneable {
               new UpdateSet(vidLeftColumn, addExpression)); // Add "vid = vid + 1" to the SET clause
 
       // Add `vid` to the RETURNING clause
-      if (!selectAllAttr) {
+      if (postgresql && !selectAllAttr) {
         Column vidReturnColumn = new Column("vid");
         if (updateStatement.getFromItem() != null
             && updateStatement.getFromItem().getAlias() != null
@@ -337,11 +333,11 @@ public class TemplateSQL implements Cloneable {
 
   // specific for YCSB workload
   private void analyseTemplate() {
-    if (this.table.equals(YCSBConstants.TABLE_NAME)) {
-      this.needRewriteUnderRC = true;
-      this.needRewriteUnderSI = true;
-      rewrite();
-    }
+    //    if (this.table.equals(YCSBConstants.TABLE_NAME)) {
+    this.needRewriteUnderRC = true;
+    this.needRewriteUnderSI = true;
+    rewrite();
+    //    }
   }
 
   private void findJdbcParameters() {
