@@ -50,3 +50,4 @@ adapter.log
 test_function.py
 logs/
 bin/
+agent/__pycache__

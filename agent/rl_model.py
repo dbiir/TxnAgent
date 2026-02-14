@@ -1,539 +1,623 @@
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import torch.nn.functional as F
-import numpy as np
-from typing import List, Dict, Tuple, Optional, Union
-from collections import deque
+from torch.distributions import Categorical, Normal
+from torch.nn.utils.stateless import functional_call
 import random
 
-from agent.partition import PartitionNode
 
-class PPOBuffer:
-    def __init__(self, size, state_dim, device, gamma=0.99, lam=0.95):
-        self.states = []
-        self.actions = []
-        self.rewards = []
-        self.values = []
-        self.log_probs = []
-        self.dones = []
-
-        self.advantages = None
-        self.returns = None
-
-        self.gamma = gamma
-        self.lam = lam
-        self.device = device
-
-    def store(self, state, action, reward, value, log_prob, done):
-        self.states.append(state)
-        self.actions.append(action)
-        self.rewards.append(reward)
-        self.values.append(value)
-        self.log_probs.append(log_prob)
-        self.dones.append(done)
-
-    def compute_advantages(self, last_value=0):
-        """
-        Compute GAE advantages and returns
-        """
-        values = self.values + [last_value]
-        gae = 0
-        advantages = []
-
-        for t in reversed(range(len(self.rewards))):
-            delta = (
-                self.rewards[t]
-                + self.gamma * values[t + 1] * (1 - self.dones[t])
-                - values[t]
-            )
-
-            gae = delta + self.gamma * self.lam * (1 - self.dones[t]) * gae
-            advantages.insert(0, gae)
-
-        self.advantages = torch.tensor(
-            advantages, dtype=torch.float32, device=self.device
-        )
-
-        self.returns = self.advantages + torch.tensor(
-            self.values, dtype=torch.float32, device=self.device
-        )
-
-        # Normalize advantages (VERY IMPORTANT)
-        self.advantages = (
-            (self.advantages - self.advantages.mean())
-            / (self.advantages.std() + 1e-8)
-        )
-
-    def get(self):
-        return (
-            torch.stack(self.states),
-            torch.tensor(self.actions, device=self.device),
-            self.advantages,
-            self.returns,
-            torch.stack(self.log_probs),
-        )
-
-    def clear(self):
-        self.__init__(len(self.states), self.states[0].shape[0], self.device)
-
+# ============================================================
+# Multi-Head Parameterized Actor Network (4 action types)
+# ============================================================
 
 class MultiHeadParameterizedActor(nn.Module):
-    """Multi-head actor network that generates both action types and parameters"""
-    
-    def __init__(self, state_dim: int, hidden_dim: int = 128):
-        super(MultiHeadParameterizedActor, self).__init__()
-        
+    """
+    Multi-head actor that outputs:
+      1) action-type logits  (4 types: split / merge / change_iso / adjust_interval)
+      2) per-action-type parameter distributions
+    """
+
+    ACTION_TYPES = ['split', 'merge', 'change_iso', 'adjust_interval']
+
+    def __init__(self, state_dim, hidden_dim=128):
+        super().__init__()
+
         # Shared feature extractor
-        self.shared_network = nn.Sequential(
+        self.shared = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU()
         )
-        
-        # Action type head (discrete: 4 action types)
+
+        # Action-type head  (discrete: 4 logits)
         self.action_type_head = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim // 2),
             nn.ReLU(),
-            nn.Linear(hidden_dim // 2, 4),  # 4 action types
-            nn.Softmax(dim=-1)
+            nn.Linear(hidden_dim // 2, 4)       # raw logits – NO softmax
         )
-        
-        # Parameter heads for each action type
-        self.parameter_heads = nn.ModuleDict({
-            # split action: no parameters needed
-            'split': nn.Identity(),  # No parameters for split
-            
-            # merge action: isolation_level (discrete) + mu (continuous)
-            'merge': nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim // 2),
-                nn.ReLU(),
-                nn.Linear(hidden_dim // 2, 4)  # iso_level (3) + mu_bin (1)
-            ),
-            
-            # change_iso action: target isolation level (discrete)
-            'change_iso': nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim // 2),
-                nn.ReLU(),
-                nn.Linear(hidden_dim // 2, 3)  # 3 isolation levels
-            ),
-            
-            # adjust_interval action: new mu value (continuous)
-            'adjust_interval': nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim // 2),
-                nn.ReLU(),
-                nn.Linear(hidden_dim // 2, 1),  # single continuous value
-                nn.Sigmoid()  # Normalize to [0, 1] range
-            )
-        })
-    
-    def forward(self, state: torch.Tensor) -> Dict:
-        """Forward pass generating both action type and parameters"""
-        shared_features = self.shared_network(state)
-        
-        # Get action type probabilities
-        action_probs = self.action_type_head(shared_features)
-        
-        # Get parameters for each action type
+
+        # ---------- per-action parameter heads ----------
+
+        # split:  iso_l (3 logits) + mu_l (1) + iso_r (3 logits) + mu_r (1) = 8
+        self.split_head = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.Linear(hidden_dim // 2, 8)
+        )
+
+        # merge:  iso (3 logits) + mu (1) = 4
+        self.merge_head = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.Linear(hidden_dim // 2, 4)
+        )
+
+        # change_iso:  target iso (3 logits)
+        self.change_iso_head = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.Linear(hidden_dim // 2, 3)
+        )
+
+        # adjust_interval:  mu mean (1) – continuous
+        self.adjust_interval_head = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.Linear(hidden_dim // 2, 1)
+        )
+
+        # Learnable log-std for continuous mu heads
+        self.log_std_mu = nn.Parameter(torch.zeros(1))
+
+    # ------------------------------------------------------------------ #
+
+    def forward(self, state):
+        """
+        Returns
+        -------
+        dict with keys:
+          'action_logits' : (B, 4)    raw logits for action type
+          'parameters'    : dict[str, dict]   per-action processed params
+        """
+        feat = self.shared(state)
+
+        action_logits = self.action_type_head(feat)
+
         parameters = {}
-        for action_name, head in self.parameter_heads.items():
-            raw_params = head(shared_features)
-            parameters[action_name] = self._process_parameters(action_name, raw_params)
-        
+        parameters['split'] = self._process_split(self.split_head(feat))
+        parameters['merge'] = self._process_merge(self.merge_head(feat))
+        parameters['change_iso'] = self._process_change_iso(self.change_iso_head(feat))
+        parameters['adjust_interval'] = self._process_adjust_interval(self.adjust_interval_head(feat))
+
         return {
-            'action_probs': action_probs,
+            'action_logits': action_logits,
             'parameters': parameters
         }
-    
-    def _process_parameters(self, action_name: str, raw_params: torch.Tensor) -> Dict:
-        """Process raw parameters into meaningful values"""
-        if action_name == 'split':
-            return {}  # No parameters needed
-        
-        elif action_name == 'merge':
-            # iso_level: discrete (0, 1, 2), mu: continuous
-            iso_logits = raw_params[:, :3] if len(raw_params.shape) > 1 else raw_params[:3]
-            mu_value = raw_params[:, 3:4] if len(raw_params.shape) > 1 else raw_params[3:4]
-            mu_value = mu_value * 10.0  # Scale to reasonable range
-            
-            return {
-                'isolation_level_probs': F.softmax(iso_logits, dim=-1),
-                'mu_value': mu_value
-            }
-        
-        elif action_name == 'change_iso':
-            # Target isolation level probabilities
-            return {'target_iso_probs': F.softmax(raw_params, dim=-1)}
-        
-        elif action_name == 'adjust_interval':
-            # Scaled mu value (0.1 to 10.0 range)
-            scaled_mu = raw_params * 9.9 + 0.1  # Scale to [0.1, 10.0]
-            return {'new_mu': scaled_mu}
-        
-        return {}
 
-class CriticNetwork(nn.Module):
-    """Critic network for value function estimation"""
-    
-    def __init__(self, state_dim: int, hidden_dim: int = 128):
-        super(CriticNetwork, self).__init__()
-        self.network = nn.Sequential(
+    # ------------------------------------------------------------------ #
+    #  Parameter processing helpers (keep everything as tensors)
+    # ------------------------------------------------------------------ #
+
+    def _process_split(self, raw):
+        # raw: (B, 8)  or  (8,)
+        if raw.dim() == 1:
+            raw = raw.unsqueeze(0)
+        return {
+            'iso_l_logits': raw[:, :3],         # (B, 3)
+            'mu_l_mean': raw[:, 3:4] * 10.0,    # (B, 1) scaled
+            'iso_r_logits': raw[:, 4:7],         # (B, 3)
+            'mu_r_mean': raw[:, 7:8] * 10.0      # (B, 1) scaled
+        }
+
+    def _process_merge(self, raw):
+        if raw.dim() == 1:
+            raw = raw.unsqueeze(0)
+        return {
+            'iso_logits': raw[:, :3],            # (B, 3)
+            'mu_mean': raw[:, 3:4] * 10.0        # (B, 1) scaled
+        }
+
+    def _process_change_iso(self, raw):
+        if raw.dim() == 1:
+            raw = raw.unsqueeze(0)
+        return {
+            'iso_logits': raw                    # (B, 3)
+        }
+
+    def _process_adjust_interval(self, raw):
+        if raw.dim() == 1:
+            raw = raw.unsqueeze(0)
+        return {
+            'mu_mean': torch.sigmoid(raw) * 10.0  # (B, 1) in [0, 10]
+        }
+
+    # ------------------------------------------------------------------ #
+    #  Distribution helpers (used by MetaPPO for log-prob computation)
+    # ------------------------------------------------------------------ #
+
+    def get_distributions(self, state, action_mask=None, params=None):
+        """
+        Get all distributions needed for PPO loss.
+
+        Parameters
+        ----------
+        state       : (B, state_dim)
+        action_mask : (B, 4) or None – 1 = allowed, 0 = masked
+        params      : dict for functional_call (MAML inner loop), or None
+
+        Returns
+        -------
+        action_type_dist : Categorical over 4 types
+        param_dists      : dict[str, dict of Distribution objects]
+        """
+        if params is None:
+            out = self.forward(state)
+        else:
+            out = functional_call(self, params, (state,))
+
+        action_logits = out['action_logits']
+
+        # Apply action mask (set masked logits to -inf)
+        if action_mask is not None:
+            action_logits = action_logits + (1 - action_mask) * (-1e8)
+
+        action_type_dist = Categorical(logits=action_logits)
+
+        mu_std = self.log_std_mu.exp()
+
+        param_dists = {}
+        p = out['parameters']
+
+        param_dists['split'] = {
+            'iso_l': Categorical(logits=p['split']['iso_l_logits']),
+            'mu_l': Normal(p['split']['mu_l_mean'], mu_std),
+            'iso_r': Categorical(logits=p['split']['iso_r_logits']),
+            'mu_r': Normal(p['split']['mu_r_mean'], mu_std),
+        }
+        param_dists['merge'] = {
+            'iso': Categorical(logits=p['merge']['iso_logits']),
+            'mu': Normal(p['merge']['mu_mean'], mu_std),
+        }
+        param_dists['change_iso'] = {
+            'iso': Categorical(logits=p['change_iso']['iso_logits']),
+        }
+        param_dists['adjust_interval'] = {
+            'mu': Normal(p['adjust_interval']['mu_mean'], mu_std),
+        }
+
+        return action_type_dist, param_dists
+
+
+# Keep a backward-compatible alias
+Actor = MultiHeadParameterizedActor
+
+
+# ============================================================
+# Critic Network
+# ============================================================
+
+class Critic(nn.Module):
+    def __init__(self, state_dim, hidden_dim=128):
+        super().__init__()
+        self.net = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim // 2),
             nn.ReLU(),
             nn.Linear(hidden_dim // 2, 1)
         )
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.network(x)
 
-class ParameterizedPPOAgent:
-    """Complete PPO agent with multi-head parameterized actor"""
-    
-    def __init__(self, state_dim: int, action_dim: int = 4, 
-                 hidden_dim: int = 128, lr: float = 3e-4, 
-                 gamma: float = 0.99, clip_epsilon: float = 0.2,
-                 ppo_epochs: int = 4, batch_size: int = 32):
-        
-        self.state_dim = state_dim
-        self.gamma = gamma
-        self.clip_epsilon = clip_epsilon
-        self.ppo_epochs = ppo_epochs
-        self.batch_size = batch_size
-        
-        # Networks
-        self.actor = MultiHeadParameterizedActor(state_dim, hidden_dim)
-        self.critic = CriticNetwork(state_dim, hidden_dim)
-        
-        # Optimizers
-        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=lr)
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=lr)
-        
-        # Experience buffer
-        self.buffer = PPOBuffer()
-        
-        # Action space
-        self.action_types = ['split', 'merge', 'change_iso', 'adjust_interval']
-        self.isolation_levels = ['SER', 'SI', 'RC']  # 0, 1, 2
-    
-    def select_parameterized_action(self, state: torch.Tensor, action_mask: torch.Tensor) -> Dict:
-        """Select action with learned parameters"""
-        with torch.no_grad():
-            # Get action outputs
-            output = self.actor(state.unsqueeze(0) if len(state.shape) == 1 else state)
-            action_probs = output['action_probs']
-            
-            # Apply action mask
-            masked_probs = action_probs * action_mask.unsqueeze(0) if len(state.shape) == 1 else action_probs * action_mask
-            masked_probs = masked_probs / (masked_probs.sum(dim=-1, keepdim=True) + 1e-8)
-            
-            # Sample action type
-            action_dist = torch.distributions.Categorical(masked_probs)
-            action_type_idx = action_dist.sample()
-            action_type = self.action_types[action_type_idx.item()]
-            
-            # Get value estimate
-            value = self.critic(state.unsqueeze(0) if len(state.shape) == 1 else state)
-            
-            # Get corresponding parameters
-            parameters = self._get_action_parameters(action_type, output['parameters'][action_type])
-            
-            return {
-                'action_type': action_type,
-                'action_idx': action_type_idx.item(),
-                'parameters': parameters,
-                'log_prob': action_dist.log_prob(action_type_idx),
-                'value': value.squeeze()
-            }
-    
-    def _get_action_parameters(self, action_type: str, param_output: Dict) -> Dict:
-        """Convert parameter outputs to actual action parameters"""
-        if action_type == 'split':
-            return {}  # No parameters needed
-        
-        elif action_type == 'merge':
-            # Sample isolation level from learned probabilities
-            iso_probs = param_output['isolation_level_probs']
-            iso_dist = torch.distributions.Categorical(iso_probs)
-            isolation_level = iso_dist.sample().item()
-            
-            return {
-                'isolation_level': isolation_level,
-                'mu': param_output['mu_value'].item()
-            }
-        
-        elif action_type == 'change_iso':
-            # Sample target isolation level
-            target_iso_probs = param_output['target_iso_probs']
-            target_iso_dist = torch.distributions.Categorical(target_iso_probs)
-            target_isolation = target_iso_dist.sample().item()
-            
-            return {'target_isolation': target_isolation}
-        
-        elif action_type == 'adjust_interval':
-            return {'new_mu': param_output['new_mu'].item()}
-        
-        return {}
-    
-    def store_experience(self, state, action, reward, next_state, log_prob, value, action_mask):
-        """Store experience in buffer"""
-        self.buffer.add(state, action, reward, next_state, log_prob, value, action_mask)
-    
-    def update(self):
-        """Update policy using PPO"""
-        if len(self.buffer) < self.batch_size:
-            return None, None
-        
-        actor_losses = []
-        critic_losses = []
-        
-        for _ in range(self.ppo_epochs):
-            batch = self.buffer.sample(self.batch_size)
-            if batch is None:
-                continue
-                
-            # Convert to tensors
-            states = torch.stack(batch['states'])
-            actions = torch.tensor(batch['actions'], dtype=torch.long)
-            rewards = torch.tensor(batch['rewards'], dtype=torch.float32)
-            next_states = torch.stack(batch['next_states'])
-            old_log_probs = torch.stack(batch['log_probs'])
-            old_values = torch.stack(batch['values'])
-            action_masks = torch.stack(batch['action_masks'])
-            
-            # Calculate advantages
-            with torch.no_grad():
-                next_values = self.critic(next_states).squeeze()
-                targets = rewards + self.gamma * next_values
-                advantages = targets - old_values
-                advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-            
-            # Update actor
-            actor_output = self.actor(states)
-            action_probs = actor_output['action_probs']
-            
-            # Apply masks
-            masked_probs = action_probs * action_masks
-            masked_probs = masked_probs / (masked_probs.sum(dim=-1, keepdim=True) + 1e-8)
-            
-            # PPO loss
-            action_dist = torch.distributions.Categorical(masked_probs)
-            new_log_probs = action_dist.log_prob(actions)
-            
-            ratio = torch.exp(new_log_probs - old_log_probs)
-            surr1 = ratio * advantages
-            surr2 = torch.clamp(ratio, 1 - self.clip_epsilon, 1 + self.clip_epsilon) * advantages
-            actor_loss = -torch.min(surr1, surr2).mean()
-            
-            # Update critic
-            current_values = self.critic(states).squeeze()
-            critic_loss = F.mse_loss(current_values, targets)
-            
-            # Backpropagation
-            self.actor_optimizer.zero_grad()
-            actor_loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 0.5)
-            self.actor_optimizer.step()
-            
-            self.critic_optimizer.zero_grad()
-            critic_loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 0.5)
-            self.critic_optimizer.step()
-            
-            actor_losses.append(actor_loss.item())
-            critic_losses.append(critic_loss.item())
-        
-        # Clear buffer after update
-        self.buffer.clear()
-        
-        avg_actor_loss = np.mean(actor_losses) if actor_losses else 0.0
-        avg_critic_loss = np.mean(critic_losses) if critic_losses else 0.0
-        
-        return avg_actor_loss, avg_critic_loss
+    def forward(self, x):
+        return self.net(x).squeeze(-1)
 
-class CompletePartitionAdjustmentSystem:
-    """Complete system integrating all components"""
-    
-    def __init__(self, K: int = 3, lambda_param: float = 0.5):
-        self.K = K
-        self.lambda_param = lambda_param
-        self.rl_agent = ParameterizedPPOAgent(state_dim=35)  # embedding(32) + 3 additional features
-        self.performance_history = deque(maxlen=100)
-        self.correctness_history = deque(maxlen=100)
-        self.baseline_performance = None
-        self.baseline_correctness = None
-        self.time_step = 0
-    
-    def prepare_state_representation(self, partition: PartitionNode, embedding: torch.Tensor) -> torch.Tensor:
-        """Prepare state vector for RL agent"""
-        # State: [embedding(32), intensity, is_leaf, can_merge, isolation_level, mu]
-        state_vector = torch.cat([
-            embedding,
-            torch.tensor([partition.workload_intensity]),
-            torch.tensor([float(partition.is_leaf)]),
-            torch.tensor([float(partition.can_merge)]),
-            torch.tensor([partition.isolation_level]),
-            torch.tensor([partition.mu])
-        ])
-        return state_vector
-    
-    def generate_action_mask(self, partition: PartitionNode) -> torch.Tensor:
-        """Generate action mask based on partition constraints"""
-        mask = torch.zeros(4)  # 4 action types
-        
-        if partition.is_leaf:
-            mask[0] = 1  # split allowed
-            mask[2] = 1  # change isolation allowed
-            mask[3] = 1  # adjust interval allowed
-            
-        if partition.can_merge:
-            mask[1] = 1  # merge allowed
-            
-        return mask
-    
-    def execute_action(self, partition: Partition, action: Dict) -> Dict:
-        """Execute action with learned parameters"""
-        action_type = action['action_type']
-        parameters = action['parameters']
-        
-        if action_type == 'split' and partition.is_leaf:
-            return self.execute_split(partition)
-        elif action_type == 'merge' and partition.can_merge:
-            return self.execute_merge(partition, parameters)
-        elif action_type == 'change_iso' and partition.is_leaf:
-            return self.execute_change_isolation(partition, parameters)
-        elif action_type == 'adjust_interval' and partition.is_leaf:
-            return self.execute_adjust_interval(partition, parameters)
-        else:
-            return {'success': False, 'error': 'Invalid action for partition state'}
-    
-    def execute_split(self, partition: Partition) -> Dict:
-        """Execute split action"""
-        # Create child partitions
-        left_child = Partition(partition.partition_id * 2, partition.isolation_level)
-        right_child = Partition(partition.partition_id * 2 + 1, partition.isolation_level)
-        
-        # Update partition
-        partition.is_leaf = False
-        partition.can_merge = True
-        partition.left = left_child
-        partition.right = right_child
-        left_child.parent = partition
-        right_child.parent = partition
-        
-        return {
-            'success': True,
-            'action': 'split',
-            'left_child_id': left_child.partition_id,
-            'right_child_id': right_child.partition_id
-        }
-    
-    def execute_merge(self, partition: Partition, parameters: Dict) -> Dict:
-        """Execute merge action with learned parameters"""
-        if not (partition.left and partition.right):
-            return {'success': False, 'error': 'No children to merge'}
-        
-        # Use learned parameters
-        isolation_level = parameters.get('isolation_level', partition.isolation_level)
-        mu = parameters.get('mu', partition.mu)
-        
-        # Update partition
-        partition.isolation_level = isolation_level
-        partition.mu = mu
-        partition.is_leaf = True
-        partition.can_merge = False
-        partition.left = None
-        partition.right = None
-        
-        return {
-            'success': True,
-            'action': 'merge',
-            'isolation_level': isolation_level,
-            'mu': mu
-        }
-    
-    def calculate_reward(self, current_performance: float, current_correctness: float,
-                       alpha: float = 0.7, eta_p: float = 0.5, eta_c: float = 0.5) -> Tuple[float, float, float]:
-        """Calculate reward based on design document formula"""
-        if self.baseline_performance is None:
-            self.baseline_performance = current_performance
-            self.baseline_correctness = current_correctness
-            return 0.0, 0.0, 0.0
-        
-        previous_performance = self.performance_history[-1] if self.performance_history else self.baseline_performance
-        previous_correctness = self.correctness_history[-1] if self.correctness_history else self.baseline_correctness
-        
-        # Performance improvement
-        term1_p = (current_performance - self.baseline_performance) / self.baseline_performance
-        term2_p = (current_performance - previous_performance) / previous_performance if previous_performance > 0 else 0
-        R_p = eta_p * term1_p + (1 - eta_p) * term2_p
-        
-        # Correctness penalty
-        term1_c = (current_correctness - self.baseline_correctness) / self.baseline_correctness
-        term2_c = (current_correctness - previous_correctness) / previous_correctness if previous_correctness > 0 else 0
-        P_c = eta_c * term1_c + (1 - eta_c) * term2_c
-        
-        # Combined reward
-        reward = alpha * R_p - (1 - alpha) * P_c
-        
-        return reward, R_p, P_c
-    
-    def run_complete_cycle(self, partitions: List[PartitionNode], embeddings: Dict[int, torch.Tensor],
-                         current_performance: float, current_correctness: float) -> Dict:
-        """Run one complete adjustment cycle"""
-        self.time_step += 1
-        
-        # Select top-K partitions (simplified selection)
-        selected_partitions = partitions[:self.K]
-        
-        # Execute actions for all selected partitions
-        adjustment_results = {}
-        experiences = []
-        
-        for partition in selected_partitions:
-            if partition.p_id not in embeddings:
-                continue
-                
-            # Prepare RL inputs
-            state = self.prepare_state_representation(partition, embeddings[partition.p_id])
-            action_mask = self.generate_action_mask(partition)
-            
-            # Select action
-            action_result = self.rl_agent.select_parameterized_action(state, action_mask)
-            
-            # Execute action
-            result = self.execute_action(partition, action_result)
-            adjustment_results[partition.p_id] = result
-            
-            # Calculate reward (simplified - in practice would be based on actual outcomes)
-            reward = 0.1 if result['success'] else -0.1
-            
-            # Store experience
-            next_state = self.prepare_state_representation(partition, embeddings[partition.p_id])
-            self.rl_agent.store_experience(
-                state, action_result['action_idx'], reward, next_state,
-                action_result['log_prob'], action_result['value'], action_mask
+
+# ============================================================
+# GAE
+# ============================================================
+
+def compute_gae(rewards, values, dones, gamma=0.99, lam=0.95):
+    advantages = []
+    gae = 0
+    values = values + [0]
+
+    for t in reversed(range(len(rewards))):
+        delta = (
+            rewards[t]
+            + gamma * values[t+1] * (1 - dones[t])
+            - values[t]
+        )
+        gae = delta + gamma * lam * (1 - dones[t]) * gae
+        advantages.insert(0, gae)
+
+    returns = [a + v for a, v in zip(advantages, values[:-1])]
+
+    advantages = torch.tensor(advantages)
+    advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+
+    return advantages, torch.tensor(returns)
+
+
+# ============================================================
+# Helpers – per-action log-prob
+# ============================================================
+
+def _compute_param_log_prob(action_type_idx, param_dists, action_params):
+    """
+    Compute the log-probability of the *parameter* component for each
+    sample in a batch.
+
+    Distributions have batch shape (B, ...) from the full state batch.
+    For each sample i we evaluate the i-th distribution at the i-th
+    action parameter value.
+
+    Parameters
+    ----------
+    action_type_idx : int or LongTensor (B,)
+    param_dists     : dict[str, dict of Distribution]
+    action_params   : dict  with keys  iso_l, mu_l, iso_r, mu_r, iso, mu
+    """
+    action_names = MultiHeadParameterizedActor.ACTION_TYPES
+
+    if isinstance(action_type_idx, int):
+        action_type_idx = torch.tensor([action_type_idx])
+
+    B = action_type_idx.shape[0]
+    log_probs_list = []
+
+    for i in range(B):
+        a = action_type_idx[i].item()
+        name = action_names[a]
+
+        lp = torch.tensor(0.0)
+        dists = param_dists[name]
+
+        # Each dist has batch shape (B, ...). We evaluate the full batch
+        # at each param value (broadcasts), then pick element [i] to get
+        # the log-prob from the i-th state's distribution.
+        if name == 'split':
+            lp = (
+                dists['iso_l'].log_prob(action_params['iso_l'][i])[i]
+                + dists['mu_l'].log_prob(action_params['mu_l'][i].unsqueeze(-1))[i].sum(-1)
+                + dists['iso_r'].log_prob(action_params['iso_r'][i])[i]
+                + dists['mu_r'].log_prob(action_params['mu_r'][i].unsqueeze(-1))[i].sum(-1)
             )
-        
-        # Calculate overall reward
-        overall_reward, R_p, P_c = self.calculate_reward(current_performance, current_correctness)
-        
-        # Update performance history
-        self.performance_history.append(current_performance)
-        self.correctness_history.append(current_correctness)
-        
-        # Update RL policy
-        actor_loss, critic_loss = self.rl_agent.update()
-        
-        return {
-            'selected_partitions': [p.partition_id for p in selected_partitions],
-            'adjustment_results': adjustment_results,
-            'overall_reward': overall_reward,
-            'performance_improvement': R_p,
-            'correctness_penalty': P_c,
-            'actor_loss': actor_loss,
-            'critic_loss': critic_loss,
-            'time_step': self.time_step
+        elif name == 'merge':
+            lp = (
+                dists['iso'].log_prob(action_params['iso'][i])[i]
+                + dists['mu'].log_prob(action_params['mu'][i].unsqueeze(-1))[i].sum(-1)
+            )
+        elif name == 'change_iso':
+            lp = dists['iso'].log_prob(action_params['iso'][i])[i]
+        elif name == 'adjust_interval':
+            lp = dists['mu'].log_prob(action_params['mu'][i].unsqueeze(-1))[i].sum(-1)
+
+        log_probs_list.append(lp)
+
+    return torch.stack(log_probs_list)
+
+
+# ============================================================
+# Meta-PPO (MAML-style)
+# ============================================================
+
+class MetaPPO:
+    def __init__(
+        self,
+        state_dim,
+        inner_lr=1e-3,
+        meta_lr=3e-4,
+        clip_eps=0.2,
+        gamma=0.99,
+        lam=0.95,
+        entropy_coef=0.01
+    ):
+
+        self.actor = MultiHeadParameterizedActor(state_dim)
+        self.critic = Critic(state_dim)
+
+        self.inner_lr = inner_lr
+        self.meta_optimizer = torch.optim.Adam(
+            self.actor.parameters(), lr=meta_lr
+        )
+
+        self.critic_optimizer = torch.optim.Adam(
+            self.critic.parameters(), lr=meta_lr
+        )
+
+        self.clip_eps = clip_eps
+        self.gamma = gamma
+        self.lam = lam
+        self.entropy_coef = entropy_coef
+
+    # --------------------------------------------------------
+    # PPO Loss (4-action parameterized)
+    # --------------------------------------------------------
+
+    def ppo_loss(self, states, action_types, action_params,
+                 action_masks, old_log_probs, advantages, params=None):
+        """
+        Parameters
+        ----------
+        states        : (B, state_dim)
+        action_types  : LongTensor (B,)  – index in [0,3]
+        action_params : dict of Tensors  – iso_l (B,), mu_l (B,1), etc.
+        action_masks  : (B, 4)  – 1=allowed, 0=masked
+        old_log_probs : (B,)
+        advantages    : (B,)
+        params        : optional adapted parameters (MAML)
+        """
+        action_type_dist, param_dists = \
+            self.actor.get_distributions(states, action_masks, params)
+
+        # Action-type log-prob
+        type_lp = action_type_dist.log_prob(action_types)
+
+        # Parameter log-prob (per action type)
+        param_lp = _compute_param_log_prob(action_types, param_dists, action_params)
+
+        log_probs = type_lp + param_lp
+
+        ratio = torch.exp(log_probs - old_log_probs)
+
+        surr1 = ratio * advantages
+        surr2 = torch.clamp(
+            ratio,
+            1 - self.clip_eps,
+            1 + self.clip_eps
+        ) * advantages
+
+        # Entropy bonus (action-type entropy only for stability)
+        entropy = action_type_dist.entropy()
+
+        loss = -torch.min(surr1, surr2).mean()
+        loss -= self.entropy_coef * entropy.mean()
+
+        return loss
+
+    # --------------------------------------------------------
+    # Inner Adaptation
+    # --------------------------------------------------------
+
+    def inner_update(self, task_data):
+
+        states, action_types, action_params, action_masks, \
+            rewards, dones, old_log_probs = task_data
+
+        values = self.critic(states).detach().tolist()
+        advantages, returns = compute_gae(
+            rewards, values, dones,
+            self.gamma, self.lam
+        )
+
+        loss = self.ppo_loss(
+            states, action_types, action_params,
+            action_masks, old_log_probs, advantages
+        )
+
+        grads = torch.autograd.grad(
+            loss,
+            self.actor.parameters(),
+            create_graph=True,
+            allow_unused=True        # not all param heads used every batch
+        )
+
+        adapted_params = {
+            name: param - self.inner_lr * grad if grad is not None else param
+            for (name, param), grad in zip(
+                self.actor.named_parameters(),
+                grads
+            )
         }
+
+        return adapted_params
+
+    # --------------------------------------------------------
+    # Meta Update
+    # --------------------------------------------------------
+
+    def meta_update(self, task_batch):
+
+        meta_loss = 0
+
+        for support_data, query_data in task_batch:
+
+            adapted_params = self.inner_update(support_data)
+
+            states, action_types, action_params, action_masks, \
+                rewards, dones, old_log_probs = query_data
+
+            values = self.critic(states).detach().tolist()
+            advantages, returns = compute_gae(
+                rewards, values, dones,
+                self.gamma, self.lam
+            )
+
+            loss = self.ppo_loss(
+                states, action_types, action_params,
+                action_masks, old_log_probs, advantages,
+                params=adapted_params
+            )
+
+            meta_loss += loss
+
+        meta_loss /= len(task_batch)
+
+        self.meta_optimizer.zero_grad()
+        meta_loss.backward()
+        self.meta_optimizer.step()
+
+        return meta_loss.item()
+
+    # --------------------------------------------------------
+    # Critic Update (standard shared critic)
+    # --------------------------------------------------------
+
+    def update_critic(self, states, returns):
+
+        values = self.critic(states)
+        loss = F.mse_loss(values, returns)
+
+        self.critic_optimizer.zero_grad()
+        loss.backward()
+        self.critic_optimizer.step()
+
+        return loss.item()
+
+    # --------------------------------------------------------
+    # Save / Load
+    # --------------------------------------------------------
+
+    def save(self, path):
+        torch.save({
+            "actor": self.actor.state_dict(),
+            "critic": self.critic.state_dict(),
+            "meta_opt": self.meta_optimizer.state_dict(),
+            "critic_opt": self.critic_optimizer.state_dict()
+        }, path)
+
+    def load(self, path):
+        ckpt = torch.load(path)
+        self.actor.load_state_dict(ckpt["actor"])
+        self.critic.load_state_dict(ckpt["critic"])
+        self.meta_optimizer.load_state_dict(ckpt["meta_opt"])
+        self.critic_optimizer.load_state_dict(ckpt["critic_opt"])
+
+
+# ============================================================
+# Dummy Rollout Collector (Example)
+# Replace with your DB workload environment
+# ============================================================
+
+def collect_dummy_rollout(state_dim, horizon=10):
+
+    states = []
+    action_types_list = []
+    iso_l_list, mu_l_list = [], []
+    iso_r_list, mu_r_list = [], []
+    iso_list, mu_list = [], []
+    action_masks_list = []
+    rewards = []
+    dones = []
+    old_log_probs = []
+
+    actor = MultiHeadParameterizedActor(state_dim)
+    action_names = MultiHeadParameterizedActor.ACTION_TYPES
+
+    state = torch.randn(state_dim)
+
+    for t in range(horizon):
+        # Random action mask (simulating partition constraints)
+        action_mask = torch.zeros(4)
+        # Always allow at least one action
+        action_mask[0] = 1  # split
+        action_mask[2] = 1  # change_iso
+        action_mask[3] = 1  # adjust_interval
+        if random.random() > 0.5:
+            action_mask[1] = 1  # merge sometimes allowed
+
+        action_type_dist, param_dists = actor.get_distributions(
+            state.unsqueeze(0), action_mask.unsqueeze(0)
+        )
+
+        action_type = action_type_dist.sample()          # (1,)
+        action_idx = action_type.item()
+        action_name = action_names[action_idx]
+
+        # Sample parameters from the chosen action's distributions
+        iso_l = param_dists['split']['iso_l'].sample().squeeze(0)   # ()
+        mu_l = param_dists['split']['mu_l'].sample().squeeze(0)     # (1,)
+        iso_r = param_dists['split']['iso_r'].sample().squeeze(0)
+        mu_r = param_dists['split']['mu_r'].sample().squeeze(0)
+        iso = param_dists['merge']['iso'].sample().squeeze(0) if action_name in ('merge', 'change_iso') \
+              else param_dists['change_iso']['iso'].sample().squeeze(0)
+        mu = param_dists['merge']['mu'].sample().squeeze(0) if action_name in ('merge', 'adjust_interval') \
+             else param_dists['adjust_interval']['mu'].sample().squeeze(0)
+
+        # Compute joint log-prob
+        type_lp = action_type_dist.log_prob(action_type).squeeze(0)
+        param_lp_val = torch.tensor(0.0)
+        if action_name == 'split':
+            param_lp_val = (
+                param_dists['split']['iso_l'].log_prob(iso_l)
+                + param_dists['split']['mu_l'].log_prob(mu_l).sum(-1)
+                + param_dists['split']['iso_r'].log_prob(iso_r)
+                + param_dists['split']['mu_r'].log_prob(mu_r).sum(-1)
+            ).squeeze(0)
+        elif action_name == 'merge':
+            param_lp_val = (
+                param_dists['merge']['iso'].log_prob(iso)
+                + param_dists['merge']['mu'].log_prob(mu).sum(-1)
+            ).squeeze(0)
+        elif action_name == 'change_iso':
+            param_lp_val = param_dists['change_iso']['iso'].log_prob(iso).squeeze(0)
+        elif action_name == 'adjust_interval':
+            param_lp_val = param_dists['adjust_interval']['mu'].log_prob(mu).sum(-1).squeeze(0)
+
+        log_prob = type_lp + param_lp_val
+
+        next_state = torch.randn(state_dim)
+        reward = random.random()
+        done = 0
+
+        states.append(state)
+        action_types_list.append(action_type.squeeze(0))
+        iso_l_list.append(iso_l)
+        mu_l_list.append(mu_l)
+        iso_r_list.append(iso_r)
+        mu_r_list.append(mu_r)
+        iso_list.append(iso)
+        mu_list.append(mu)
+        action_masks_list.append(action_mask)
+        rewards.append(reward)
+        dones.append(done)
+        old_log_probs.append(log_prob.detach())
+
+        state = next_state
+
+    action_params = {
+        'iso_l': torch.stack(iso_l_list),
+        'mu_l': torch.stack(mu_l_list),
+        'iso_r': torch.stack(iso_r_list),
+        'mu_r': torch.stack(mu_r_list),
+        'iso': torch.stack(iso_list),
+        'mu': torch.stack(mu_list),
+    }
+
+    return (
+        torch.stack(states),           # (H, state_dim)
+        torch.stack(action_types_list),  # (H,)
+        action_params,                 # dict of (H, ...) tensors
+        torch.stack(action_masks_list),  # (H, 4)
+        rewards,                       # list
+        dones,                         # list
+        torch.stack(old_log_probs)     # (H,)
+    )
+
+
+# ============================================================
+# Training Entrance
+# ============================================================
+
+if __name__ == "__main__":
+
+    state_dim = 36
+    agent = MetaPPO(state_dim)
+
+    for meta_iter in range(100):
+
+        task_batch = []
+
+        for _ in range(5):  # 5 tasks per meta batch
+
+            support = collect_dummy_rollout(state_dim)
+            query = collect_dummy_rollout(state_dim)
+
+            task_batch.append((support, query))
+
+        meta_loss = agent.meta_update(task_batch)
+
+        print(f"Meta Iter {meta_iter} | Meta Loss: {meta_loss:.4f}")
+
+    agent.save("meta_ppo.pt")
+    print("Model saved.")

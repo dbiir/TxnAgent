@@ -18,7 +18,7 @@ class GraphEmbeddingModel(nn.Module):
         node_in_dim (int): Dimension of input node features
         edge_in_dim (int): Dimension of input edge features
         hidden_dim (int): Hidden dimension size (default: 256)
-        output_dim (int): Output embedding dimension (default: 128)
+        output_dim (int): Output embedding dimension (default: 32)
         num_layers (int): Number of GNN message passing layers (default: 3)
         num_heads (int): Number of attention heads (default: 4)
     """
@@ -27,7 +27,7 @@ class GraphEmbeddingModel(nn.Module):
         node_in_dim: int,
         edge_in_dim: int,
         hidden_dim: int = 256,
-        output_dim: int = 128,
+        output_dim: int = 32,
         num_layers: int = 3,
         dropout = 0.01,
     ):

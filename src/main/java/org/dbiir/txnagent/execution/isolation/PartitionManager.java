@@ -45,16 +45,16 @@ public class PartitionManager {
   }
 
   public void init(String workload, String configFile) {
-    this.staticConfig = true;
     try {
       this.partitionConfig = new PartitionConfig().load(configFile);
+      this.staticConfig =
+          (this.partitionConfig.getStages() != null && !this.partitionConfig.getStages().isEmpty());
+
       for (PartitionConfig.Relation relationConfig : this.partitionConfig.getRelations()) {
         this.relationToPartitionSize.put(
-            relationConfig.getName(),
-            relationConfig.getPartitionSize()); // how many data items in one partition
+            relationConfig.getName(), relationConfig.getPartitionSize());
         this.relationToPartitionCount.put(
-            relationConfig.getName(),
-            relationConfig.getPartitionCount()); // how many partitions in one relation
+            relationConfig.getName(), relationConfig.getPartitionCount());
       }
       int partitionCount = -1;
       switch (workload) {
@@ -148,7 +148,8 @@ public class PartitionManager {
   }
 
   /*
-   * @return isolation level: `0-serializable`, 1-`snapshot isolation`; `2-read committed`
+   * @return isolation level: `0-serializable`, 1-`snapshot isolation`; `2-read
+   * committed`
    */
   public int chooseIsolation(ValidationMeta validationMeta) {
     if (startTime == 0L) {
@@ -193,14 +194,14 @@ public class PartitionManager {
   /*
    * @return global unique partition id
    * this.relationToPartition:
-   *    - relation name -> list of partition ids, e.g., R1 -> [0,1,2], R2 -> [3,4,5]
+   * - relation name -> list of partition ids, e.g., R1 -> [0,1,2], R2 -> [3,4,5]
    * this.relationToPartitionSize:
-   *    - relation name -> partition size, e.g., R1 -> 1000, R2 -> 5000
+   * - relation name -> partition size, e.g., R1 -> 1000, R2 -> 5000
    *
    * {table: R2, key: 5001}
    * partitionId is calculated by
-   *    - offsetPartition: key / partition size = 5001 / 5000 = 1
-   *    - partitionId: this.relationToPartitions.get(R2).get(1) = 4
+   * - offsetPartition: key / partition size = 5001 / 5000 = 1
+   * - partitionId: this.relationToPartitions.get(R2).get(1) = 4
    */
   public int getPartitionId(ValidationMeta validationMeta) {
     String relationName = validationMeta.getRelationName();

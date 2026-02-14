@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 import argparse
+import os
 import signal
 import socket
 
@@ -71,7 +72,17 @@ if __name__ == "__main__":
             break
         print('Received message:', data, flush=True)
         variables: list[str] = data.split(",")
-        if variables[0] == "online":
+        if variables[0] == "close":
+            print("Received close command, shutting down...", flush=True)
+            txn_service.export_metrics()
+            txn_service.writer.close()
+            # Save final checkpoint
+            ckpt_dir = os.path.join(os.path.dirname(__file__), 'models')
+            os.makedirs(ckpt_dir, exist_ok=True)
+            txn_service.rl_agent.save(os.path.join(ckpt_dir, 'final_online.pt'))
+            print("Model saved and TensorBoard closed.", flush=True)
+            break
+        elif variables[0] == "online":
             filename = variables[1]
             response: str = txn_service.service(filename, args.wl)
             client_socket.sendall(response.encode("utf-8"))

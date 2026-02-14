@@ -156,7 +156,7 @@ public class TxnSailsServer {
 
       Connection connection = DriverManager.getConnection(url, username, password);
       Statement statement = connection.createStatement();
-      String sql = "SELECT gid FROM pg_prepared_xacts where database = current_database()";
+      String sql = "SELECT gid FROM pg_prepared_xacts";
       ResultSet resultSet = statement.executeQuery(sql);
       while (resultSet.next()) {
         String xid = resultSet.getString(1);

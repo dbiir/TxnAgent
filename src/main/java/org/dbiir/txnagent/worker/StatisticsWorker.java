@@ -27,27 +27,45 @@ public class StatisticsWorker implements Runnable {
   private static final double sampleProbability = 0.1;
   private static final String ip = "localhost";
   private static final int port = 7654;
+  private static final int INTERVAL_SECONDS = 5;
+
   private RandomGenerator random;
   // cross transaction statistic
   private int maxPartitionId;
-  private int[][] partitionRelations; // 2D list, with its elements represents distributed relations
+  private int[][] partitionRelations; // 2D list: distributed txn count between partitions
   private final List<PartitionStat> partitionStats = new ArrayList<>();
   private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
-  private final AtomicInteger totalTransactions = new AtomicInteger(0);
-  private final AtomicInteger abortTransactions = new AtomicInteger(0);
+
+  // ── Counters ──────────────────────────────────────────────────
+  // committedCount: incremented for EVERY committed txn (100%).
+  // Used by the 1s scheduler to compute per-second throughput.
+  // Reset by the scheduler each tick.
+  private final AtomicInteger committedCount = new AtomicInteger(0);
+
+  // abortedCount: incremented for EVERY aborted txn (100%).
+  // Used to compute the interval-level abort ratio.
+  // Reset each cycle by reset().
+  private final AtomicInteger abortedCount = new AtomicInteger(0);
+
+  // sampledTxnCount: incremented for 10%-sampled txns (committed OR aborted).
+  // Used as the denominator for per-partition workloadIntensity.
+  // Reset each cycle by reset().
+  private final AtomicInteger sampledTxnCount = new AtomicInteger(0);
+  // ──────────────────────────────────────────────────────────────
+
   private final List<Integer> throughputHistory = new ArrayList<>();
-  private final AtomicInteger currentSecondTransactionCount = new AtomicInteger(0);
-  private final AtomicInteger currentSecondAbort = new AtomicInteger(0);
   private final AtomicLong lastReportTime = new AtomicLong(System.currentTimeMillis());
   private final String workload;
 
   // statistic file sent to transactions
   private final String filepath;
-  @Setter private String outputFilePrefix;
+  @Setter
+  private String outputFilePrefix;
   private Socket socket;
-  private boolean online;
+  private PrintWriter out;
+  private BufferedReader in;
   private static String headFormat = "%d#%d#%.2f#%.2f";
-  private static String nodeFormat = "%d#%d#%d#%.2f#%.2f#%d";
+  private static String nodeFormat = "%d#%.4f#%.4f#%.4f#%d";
   private static String edgeFormat = "%d#%d#%d";
   private static String infoRequestFormat = "online,%s";
 
@@ -60,9 +78,9 @@ public class StatisticsWorker implements Runnable {
     initPartitionStats();
     try {
       this.socket = new Socket(ip, port);
-      this.online = true;
+      this.out = new PrintWriter(socket.getOutputStream(), true);
+      this.in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
     } catch (Exception e) {
-      this.online = false;
       logger.error("Failed to connect to flusher socket at {}:{}", ip, port);
     }
   }
@@ -70,6 +88,14 @@ public class StatisticsWorker implements Runnable {
   @SneakyThrows
   @Override
   public void run() {
+    // Wait for the first interval so we have meaningful data before the first
+    // collection
+    try {
+      Thread.sleep(INTERVAL_SECONDS * 1000L);
+    } catch (InterruptedException ignored) {
+      return;
+    }
+
     while (!Thread.currentThread().isInterrupted()) {
       long timestamp = System.currentTimeMillis();
       String fileName = filepath + "/sample_" + timestamp;
@@ -83,12 +109,8 @@ public class StatisticsWorker implements Runnable {
         throw ex;
       }
 
-      // collect system metrics and send to agent
-      PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
-      BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-      // format: global throughput, global abortRate, filename
+      // send to agent
       out.println(infoRequestFormat.formatted(fileName));
-      // reset counters
       reset();
 
       // wait for reply and apply actions
@@ -96,15 +118,21 @@ public class StatisticsWorker implements Runnable {
       String data = in.readLine();
       logger.debug("Receive the prediction result: {}", data);
 
-      // set partition isolation levels based on the response from agent
       applyActions(data);
 
       // sleep for next round
       try {
-        Thread.sleep(1000);
+        Thread.sleep(INTERVAL_SECONDS * 1000L);
       } catch (InterruptedException ignored) {
         return;
       }
+    }
+    // Notify Python agent to shut down
+    try {
+      out.println("close");
+      socket.close();
+    } catch (IOException e) {
+      logger.error("Failed to send close command: {}", e.getMessage());
     }
     stopThroughputRecording();
   }
@@ -120,7 +148,8 @@ public class StatisticsWorker implements Runnable {
       case "tpcc" -> {
         maxPartitionId = TPCCConstants.getGlobalPartitionIds().size();
       }
-      default -> {}
+      default -> {
+      }
     }
   }
 
@@ -136,19 +165,26 @@ public class StatisticsWorker implements Runnable {
     }
   }
 
+  /**
+   * Called by transaction execution threads for every completed transaction.
+   *
+   * @param transaction the transaction that just finished
+   * @param committed   true if committed, false if aborted
+   */
   public void recordTransaction(Transaction transaction, boolean committed) {
-    // record the transaction for throughput calculation
+    // 100% counters — used for throughput and abort ratio
     if (committed) {
-      currentSecondTransactionCount.incrementAndGet();
+      committedCount.incrementAndGet();
     } else {
-      abortTransactions.incrementAndGet();
+      abortedCount.incrementAndGet();
     }
 
+    // sampling — used for per-partition read/write/abort stats
     boolean sample = random.nextDouble() < sampleProbability;
     if (!sample) {
       return;
     }
-    totalTransactions.incrementAndGet();
+    sampledTxnCount.incrementAndGet();
 
     HashSet<Integer> partitions = new HashSet<>();
 
@@ -198,10 +234,9 @@ public class StatisticsWorker implements Runnable {
               String.format(
                   nodeFormat,
                   i,
-                  stat.getReadCount().get(),
-                  stat.getWriteCount().get(),
+                  stat.getReadRatio(),
                   stat.getAbortRatio(),
-                  stat.getWorkloadIntensity(totalTransactions.get()),
+                  stat.getWorkloadIntensity(sampledTxnCount.get()),
                   transferIsolationLevelToInt(PartitionManager.getInstance().getIsolation(i))))
           .append("\n");
     }
@@ -216,13 +251,20 @@ public class StatisticsWorker implements Runnable {
         }
       }
     }
-    String head =
-        String.format(
-            headFormat,
-            maxPartitionId,
-            edgeCount,
-            throughputHistory.getLast(),
-            1.0 * abortTransactions.get() / Math.max(totalTransactions.get(), 1));
+    // Average throughput over last 5 seconds (matches the adjustment interval)
+    double avgThroughput = 0;
+    int windowSize = Math.min(throughputHistory.size(), INTERVAL_SECONDS);
+    if (windowSize > 0) {
+      for (int k = throughputHistory.size() - windowSize; k < throughputHistory.size(); k++) {
+        avgThroughput += throughputHistory.get(k);
+      }
+      avgThroughput /= windowSize;
+    }
+    // Per-interval abort ratio: aborted / (committed + aborted)
+    int totalThisInterval = committedCount.get() + abortedCount.get();
+    double abortRatio = totalThisInterval > 0 ? 1.0 * abortedCount.get() / totalThisInterval : 0.0;
+
+    String head = String.format(headFormat, maxPartitionId, edgeCount, avgThroughput, abortRatio);
     return head + "\n" + nodes + edges;
   }
 
@@ -242,7 +284,9 @@ public class StatisticsWorker implements Runnable {
           long startTime = lastReportTime.getAndSet(now);
           long elapsed = now - startTime;
 
-          double throughput = 1.0 * currentSecondTransactionCount.get() / Math.max(elapsed, 1);
+          // Compute per-second throughput and reset the counter
+          int committed = committedCount.getAndSet(0);
+          double throughput = 1000.0 * committed / Math.max(elapsed, 1);
           throughputHistory.add((int) throughput);
           if (throughputHistory.size() > 60) {
             throughputHistory.removeFirst();
@@ -250,7 +294,7 @@ public class StatisticsWorker implements Runnable {
         },
         10,
         1,
-        TimeUnit.SECONDS); // at fixed rate of 1 second
+        TimeUnit.SECONDS);
   }
 
   private void stopThroughputRecording() {
@@ -269,38 +313,36 @@ public class StatisticsWorker implements Runnable {
     for (PartitionStat stat : partitionStats) {
       stat.reset();
     }
+    sampledTxnCount.set(0);
+    abortedCount.set(0);
   }
 
   /*
-   * action type:
-   *  - set isolation level [2]: 0-RC, 1-SI, 2-SER
-   *  - set mu [3]: integer
+   * Response format from Python agent: id#iso#mu;id#iso#mu;...
+   * iso: 0=RC, 1=SI, 2=SER
+   * mu: integer
    */
   private void applyActions(String data) {
-    // partitionId, actionType, parameters
     String[] parts = data.split(";");
     for (String part : parts) {
       String[] items = part.split("#");
       int partitionId = Integer.parseInt(items[0]);
-      int actionType = Integer.parseInt(items[1]);
-      switch (actionType) {
-        case 2 -> {
-          int levelInt = Integer.parseInt(items[2]);
-          IsolationLevelType level = null;
-          switch (levelInt) {
-            case 0 -> level = IsolationLevelType.RC;
-            case 1 -> level = IsolationLevelType.SI;
-            case 2 -> level = IsolationLevelType.SER;
-            default -> logger.error("Unknown isolation level: {}", levelInt);
-          }
-          PartitionManager.getInstance().setIsolation(partitionId, level);
+      int isoInt = Integer.parseInt(items[1]);
+      int mu = Integer.parseInt(items[2]);
+
+      IsolationLevelType level = switch (isoInt) {
+        case 0 -> IsolationLevelType.RC;
+        case 1 -> IsolationLevelType.SI;
+        case 2 -> IsolationLevelType.SER;
+        default -> {
+          logger.error("Unknown isolation level: {}", isoInt);
+          yield null;
         }
-        case 3 -> {
-          int mu = Integer.parseInt(items[2]);
-          PartitionManager.getInstance().setMu(partitionId, mu);
-        }
-        default -> logger.error("Unknown action type: {}", actionType);
+      };
+      if (level != null) {
+        PartitionManager.getInstance().setIsolation(partitionId, level);
       }
+      PartitionManager.getInstance().setMu(partitionId, mu);
     }
   }
 
@@ -320,12 +362,15 @@ public class StatisticsWorker implements Runnable {
 
     public float getReadRatio() {
       int total = readCount.get() + writeCount.get();
-      if (total == 0) return 0.0f;
+      if (total == 0)
+        return 0.0f;
       return (float) readCount.get() / total;
     }
 
-    public float getWorkloadIntensity(int totalTransactions) {
-      return 1.0f * (abortCount.get() + commitCount.get()) / totalTransactions;
+    public float getWorkloadIntensity(int totalSampledTxns) {
+      if (totalSampledTxns == 0)
+        return 0.0f;
+      return 1.0f * (abortCount.get() + commitCount.get()) / totalSampledTxns;
     }
 
     public float getAbortRatio() {

@@ -74,25 +74,25 @@ class PartitionNode:
         else:
             return None
 
-    def split(self):
+    def split(self, iso_l, mu_l, iso_r, mu_r):
         p_cnt = self.max_micro_partitions / np.power(2, self.level_from_top - 1)
         if p_cnt == 1:  # leaf node cannot split further
             return
                 
-        left = PartitionNode(self.p_id * 2, self.isolation_level, self.mu, self.key_range_start, self.capcity // 2)
+        left = PartitionNode(self.p_id * 2, iso_l, mu_l, self.key_range_start, self.capcity // 2)
         left.father = self
         left.level_from_top = self.level_from_top + 1
         left.micro_partition_features = torch.zeros(self.max_micro_partitions, 4)
         for i in range(int(p_cnt // 2)):
             left.micro_partition_features[int(self.p_start + i)] = self.micro_partition_features[int(self.p_start + i)]
         
-        right = PartitionNode(self.p_id * 2 + 1, self.isolation_level, self.mu, self.key_range_start + self.capcity // 2, self.capcity // 2)
+        right = PartitionNode(self.p_id * 2 + 1, iso_r, mu_r, self.key_range_start + self.capcity // 2, self.capcity // 2)
         right.father = self
         right.level_from_top = self.level_from_top + 1
         right.micro_partition_features = torch.zeros(self.max_micro_partitions, 4)
         for i in range(int(p_cnt // 2)):
             right.micro_partition_features[int(self.p_start + i + p_cnt // 2)] = self.micro_partition_features[int(self.p_start + i + p_cnt // 2)]
-        
+
         # Update current node
         self.left = left
         self.right = right
