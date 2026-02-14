@@ -1,114 +1,136 @@
-# TxnSails
-The code base of TxnSails: Achieving Serializable **Transaction** Scheduling with **S**elf-**A**daptive **I**solation **L**evel **S**election.
+# TxnAgent
 
-## Brief introduction 
-TxnSails works in the middle tier between database and application. It meets three requirements:  
+The code base of TxnAgent: Achieving Serializable **Transaction** Scheduling with **S**elf-**A**daptive **I**solation **L**evel **S**election.
+
+## Brief Introduction
+
+TxnAgent works in the middle tier between database and application. It meets three requirements:
 1. It requires minimal modifications to client applications and database kernels, ensuring low implementation overhead.
 2. It must be efficient to handle dangerous structures under various lower isolation levels while ensuring SER.
 3. It must adaptively select the optimal isolation level to maximize performance in response to dynamic workloads.
-
-The architecture of TxnSails is illustrated in figure below.
 
 <div align=center>
 <img alt="Architecture" src="docs/images/architecture.jpg" width="75%"/>
 </div>
 
-## Code description
-### Code Navigation
-Key modules and corresponding source code: 
-1. `Analyzer` - src/.../worker/OfflineWorker, src/.../analysis/*
-2. `Executor` - src/.../worker/OnlineWorker, src/.../execution/validation/*
-3. `Adapter` - src/.../worker/{Adapter, Flusher}, src/.../execution/sample/\*, isolation\_adapter/\* (Python)
+## Code Navigation
 
-Note: `...` represents the filepath `main/java/org/dbiir/txnsails`.
+Key modules and corresponding source code:
 
-**Analyzer**: 
+| Module | Source Files |
+|--------|-------------|
+| **Analyzer** | `src/.../worker/OfflineWorker`, `src/.../analysis/*` |
+| **Executor** | `src/.../worker/OnlineWorker`, `src/.../execution/validation/*` |
+| **Adapter** | `src/.../worker/{Adapter, Flusher}`, `src/.../execution/sample/*` |
+| **RL Agent** | `agent/agent.py`, `agent/rl_model.py`, `adapter.py` |
+| **Partition** | `src/.../execution/isolation/PartitionManager.java`, `PartitionConfig.java` |
 
-**Executor**: 
+> Note: `...` represents the filepath `main/java/org/dbiir/txnsails`.
 
-**Adapter**: 
+## Prerequisites
 
-## Client Libs
-### Interface description
-We provide four apis for clients: 
+- **JDK 21** and **Gradle 9+**
+- **Python 3.9+** with packages: `torch`, `numpy`, `tensorboard`
+- **PostgreSQL 15+** (with data pre-loaded for your benchmark)
 
-- `register() -> (status, serverSideIdx)`:
-- `analyse() -> (status)`:
-- `execute() -> (status, results/errorMsg)`:
-- `commit()/rollback() -> (status)`: 
-
-Application developer should rebuild a portion of their code to utilize TxnSails' capabilities and TxnSails can automatically guarantee the serializable.
-Note that we do not modify the application workload to achieve serializable, for example, we do not either promote reads to writes or introduce outside lock manager.
-We would continue to improve above apis and TxnSails to support serializable transactions for more heterogeneous database systems, 
-thereby further reducing application development costs.
-
-
-### How to use
-**Online workflow**:
-1. connect to TxnSailsSever;
-2. invoke 
-
-**Offline workflow**:
-
-## Evaluation
-### Environment and Configuration
-We conducted our experiments on two servers, each equipped with an Intel(R) Xeon(R) Platinum 8361HC CPU @ 2.60GHz processor, which includes 24 physical cores, 64 GB of DRAM, and a 500 GB SSD. 
-The operating system was CentOS Linux release 7.9. 
-
-We utilize BenchBase as our benchmark simulator, deploying it on a single server. We modify it to interface with TxnSails. By default, the experiments are conducted using 128 client terminals.
-
-We deployed PostgreSQL 15.2 as the database engine. For our database configuration, we allocated a buffer pool size of 24GB, limited the maximum number of connections to 2000, and established a lock wait timeout of 100 ms. To eliminate network-related variables from affecting the results, both TxnSails and PostgreSQL were deployed on another server. 
-
-### How to Build
-TxnSails requires JDK 21 and Maven 3.9+ for compilation. To run the build scripts, you need to ensure that Python 3.9+ is installed. Meanwhile, the graph learning module requires <TODO>.
-
-You can run the following command to build TxnSails server:
+## How to Build
 
 ```shell
-mvn clean package -Dmaven.javadoc.skip=true -Dcheckstyle.skip=true -Drat.skip=true -Djacoco.skip=true -DskipITs -DskipTests
+./gradlew build
 ```
 
-This command will compile the project and the fat jar can be found in `target` folder. 
+The fat jar will be placed at `build/libs/TxnSailsServer-fat-2.0-all.jar`.
 
-### How to Run
-We provide python scripts located in the `scripts/` folder to generate the corresponding `.xml` configuration files. Before running the tests, you should modify the information in the python script to ensure the generation of configuration files that meet the requirements, including the JDBC connection URL to connect to the database, and the database username and password.
+## Deployment
 
-For example, you can run the following command generate your ycsb configuration files:
+### Architecture
 
-``` shell
-python3 gen_ycsb_config.py
+```
+┌────────────┐  TCP :7654  ┌───────────────────┐  TCP :9876  ┌────────────┐
+│  adapter.py │◄────────────│  TxnSailsServer   │◄────────────│   Client   │
+│  (RL Agent) │────────────►│  (Java Server)     │────────────►│  (TriStar) │
+└────────────┘  actions     │  StatisticsWorker  │  txn reqs   └────────────┘
+                            └───────────────────┘
 ```
 
-After you have completed the compilation and generated necessary configuration files, you can run the benchmark tests using the run_test.py script. TxnSails does not include the data loading part. That means you should load data into the database by yourselves before running the tests. The schemas for all benchmarks (SmallBank, TPC-C, YCSB) are located in /config.
+**Startup order matters**: the adapter must be listening before the server starts (StatisticsWorker connects to the adapter on init).
 
-You can run the following command to get help:
-
-``` shell
-python3 runTxnSailsServer.py -h
-```
-
-The following options are provided:
+### Step 1: Start the RL Agent (adapter)
 
 ```shell
-  -h, --help            show this help message and exit
-  -f {scalability,hotspot-128,skew-128,wc_ratio-256,bal_ratio-128,wc_ratio-128,random-128,no_ratio-128,pa_ratio-128,wr_ratio-128} [{scalability,hotspot-128,skew-128,wc_ratio-256,bal_ratio-128,wc_ratio-
-128,random-128,no_ratio-128,pa_ratio-128,wr_ratio-128} ...], --function {scalability,hotspot-128,skew-128,wc_ratio-256,bal_ratio-128,wc_ratio-128,random-128,no_ratio-128,pa_ratio-128,wr_ratio-128} [{scalability,hotspot-128,skew-128,wc_ratio-256,bal_ratio-128,wc_ratio-128,random-128,no_ratio-128,pa_ratio-128,wr_ratio-128} ...]
-                        specify the function
-  -w {ycsb,tpcc,smallbank}, --workload {ycsb,tpcc,smallbank}
-                        specify the workload
-  -e {postgresql}, --engine {postgresql}
-                        specify the workload
-  -n CNT, --cnt CNT     count of execution
-  -p PHASE, --phase PHASE
-                        online predict or offline training
+python3 adapter.py -w ycsb
 ```
 
-### Running example
-You can run the command to execute the hotspot-128 test of the SmallBank benchmark in PostgreSQL:
+This starts the Python RL agent, which:
+- Initializes the MAML-based PPO model
+- Loads a pre-trained checkpoint from `models/best_meta_ppo.pt` (if available)
+- Listens on **port 7654** for the Java `StatisticsWorker` connection
+
+**Arguments:**
+| Flag | Description |
+|------|-------------|
+| `-w`, `--workload` | **Required**. Workload name: `ycsb`, `tpcc`, or `smallbank` |
+| `-f`, `--filepath` | Optional. File path for offline training data |
+| `-p`, `--phase` | Optional. `offline` or `online` (default: online) |
+
+### Step 2: Start TxnAgentServer
+
 ```shell
-python3 runTxnSailsServer.py -w ycsb -f dynamic-128 -e postgresql -p online
-
-python3 runTxnSailsServer.py -w smallbank -f hotspot-256 -e postgresql -p online
+java -jar build/libs/TxnAgentServer-fat-2.0-all.jar \
+    -c config/ycsb.xml \
+    -s config/ycsb.sql \
+    -t config/partition/ycsb/partition.yaml \
+    -p online
 ```
 
-Note: you should replace the `prefix_cmd_local`, `prefix_cmd_remote_java`, `remote_client_dir`, `config_prefix`, and `remote_machine_ip` with your own configuration. 
+This starts the Java server, which:
+- Loads the workload configuration from the XML file
+- Initializes `PartitionManager` with partition layout from the YAML file
+- Starts `StatisticsWorker` (connects to the adapter on port 7654)
+- Listens on **port 9876** for client connections
+
+**Arguments:**
+| Flag | Description |
+|------|-------------|
+| `-c`, `--config` | **Required**. Workload XML configuration file |
+| `-s`, `--schema` | **Required**. Database schema SQL file |
+| `-t`, `--partition` | Partition configuration YAML file (enables partitioning) |
+| `-d`, `--directory` | Base directory for result/meta files |
+| `-p`, `--phase` | `online` (RL-driven) or `offline` (static stages) |
+
+### Step 3: Run the Client
+
+Use your benchmark client (e.g., TriStar) to connect to port 9876 and send workload:
+
+```shell
+java -cp target/tristar/tristar/lib/ -jar target/tristar/tristar/tristar.jar \
+    -b ycsb \
+    -c config/ycsb/hotspot-128/postgresql/ycsb_cc_FS.xml \
+    --execute=true \
+    -d results/ycsb/hotspot-128
+```
+
+### Partition Configuration
+
+There are two modes controlled by whether the YAML file contains `stages`:
+
+**Online mode** (RL agent controls isolation levels — no `stages`):
+```yaml
+workload:
+  name: ycsb
+  scalaFactor: 1000
+  relations:
+    - name: usertable
+      partitionSize: 1000
+      partitionCount: 1000
+```
+
+## Automated Test Runner
+
+For running full test suites (adapter → server → client lifecycle), use:
+
+```shell
+python3 run_tests.py -w ycsb -e postgresql -f skew-128
+```
+
+See `python3 run_tests.py -h` for all options.

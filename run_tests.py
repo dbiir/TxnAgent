@@ -127,7 +127,7 @@ def run_once(args, func: str, pconfig_path: str = "") -> str:
     if pconfig_path:
         partition_file_list = get_partition_files(pconfig_path)
     else:
-        partition_file_list = [f"config/partition/{args.wl}/partition-2.yaml"]
+        partition_file_list = [f"config/partition/{args.wl}/partition.yaml"]
 
     config_files = get_config_files(args.wl, func, args.engine)
     if not config_files:
