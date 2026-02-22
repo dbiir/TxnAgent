@@ -62,7 +62,7 @@ class PartitionGraph:
     abort_ratio: float                      # global abort rate
 ```
 
-**Configuration**: 8 macro partitions × 8 micro-partitions = 64 micro-partitions, each holding up to 1024 keys.
+**Configuration**: Loaded dynamically from `config/partition/<workload>/partition.yaml`. Each macro partition contains 8 micro-partitions.
 
 ---
 
@@ -165,26 +165,38 @@ $$P_c = \eta_c \cdot \frac{C_t - C_0}{C_0} + (1 - \eta_c) \cdot \frac{C_t - C_{t
 for each service() call:
     1. Parse sample file → graph + features
     2. Compute reward from throughput/abort delta
-    3. Store experience in buffer
+    3. Store experience in buffer + record (s,a,r,s') transition
     4. If buffer ≥ 4:  inner_update(buffer) → adapted_params
     5. Select action using adapted_params
-    6. If buffer ≥ 16: meta_update(support, query) → clear buffer
+    6. If buffer ≥ 8:  meta_update(support, query) → clear buffer
     7. Return response: "id#iso#mu;id#iso#mu;..."
 ```
 
+On shutdown, transitions are saved to `metas/transitions/transitions_<timestamp>.pt`.
+
 ### Offline Meta-Training (`offline_train_rl.py`)
+
+Trains on recorded `(s, a, r, s')` transitions from online runs:
 
 ```
 for each epoch:
-    for each workload directory (= MAML task):
-        1. Collect rollout from sample files
-        2. Split into support / query sets
+    for each .pt file (= MAML task):
+        1. Load recorded transitions
+        2. Re-evaluate log_probs under current policy
+        3. Split into support / query sets
     meta_update(task_batch)  # adapt on support, evaluate on query
     update_critic(query_states, returns)
     Save best checkpoint by meta-loss
 ```
 
-**Checkpoint**: `checkpoints/best_meta_ppo.pt`
+```bash
+python -m agent.offline_train_rl --data_dir metas/transitions --epochs 200
+```
+
+**Checkpoint loading priority** (on startup):
+1. `models/final_online.pt` — most recent online-trained model
+2. `models/best_meta_ppo.pt` — offline meta-trained model
+3. Fresh initialization
 
 ---
 
@@ -221,7 +233,18 @@ Java `applyActions()` parses each entry and calls:
 
 ### Metrics Export
 
-On close, `export_metrics()` writes `logs/metrics/metrics_<YYYYMMDD_HHMMSS>.json` containing all per-step and per-update metrics.
+On close, `export_metrics()` writes:
+- `logs/metrics/metrics_<timestamp>.json` — all per-step and per-update metrics
+- `metas/transitions/transitions_<timestamp>.pt` — recorded transitions for offline training
+- `models/final_online.pt` — model checkpoint for resuming
+
+### Log Parser (`parse_adapter_log.py`)
+
+```bash
+python parse_adapter_log.py <logfile>              # summary table
+python parse_adapter_log.py <logfile> --csv out.csv # CSV export
+python parse_adapter_log.py <logfile> --plot        # matplotlib plots
+```
 
 ```bash
 tensorboard --logdir runs/

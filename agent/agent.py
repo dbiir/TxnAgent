@@ -1,5 +1,6 @@
 import random
 import torch
+import yaml
 from agent.graph import PartitionGraph
 from agent.graph_embedding import GraphEmbeddingModel
 from agent.heuristic import HeuristicSelector
@@ -23,12 +24,21 @@ class TxnAgent:
     ETA_C = 0.5          # η_c: weight long-term vs short-term in P_c
 
     USE_GRAPH_EMBEDDING = False  # True = GNN embedding, False = raw partition features
+    MIN_BASELINE_TPUT = 100      # minimum throughput (req/s) before establishing baseline
 
-    def __init__(self):
-        self.partition_cnt = 8
+    def __init__(self, workload: str = 'ycsb'):
+        self.workload = workload
         self.max_micro_partitions = 8
-        self.marco_partition_capacity = 8192
-        self.partition_info: list[PartitionNode] = []   # used for online self-adaptive adjustment
+
+        # Read partition layout from YAML
+        partition_yaml = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            '..', 'config', 'partition', workload, 'partition.yaml'
+        )
+        self.partition_cnt, self.marco_partition_capacity = \
+            self._load_partition_config(partition_yaml)
+
+        self.partition_info: list[PartitionNode] = []
         self.graphs: list[PartitionGraph]
         self.heuristic_selector = HeuristicSelector()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -38,19 +48,27 @@ class TxnAgent:
         # RL agent for partition adjustment decisions
         self.rl_agent = MetaPPO(state_dim=self.STATE_DIM)
 
-        # Try loading meta-trained checkpoint
-        ckpt_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), '..', 'models', 'best_meta_ppo.pt'
+        # Try loading saved checkpoints (online > offline)
+        models_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), '..', 'models'
         )
-        if os.path.exists(ckpt_path):
-            self.rl_agent.load(ckpt_path)
-            print(f"[TxnAgent] Loaded meta-trained checkpoint: {ckpt_path}", flush=True)
+        online_ckpt = os.path.join(models_dir, 'final_online.pt')
+        meta_ckpt = os.path.join(models_dir, 'best_meta_ppo.pt')
+
+        if os.path.exists(online_ckpt):
+            self.rl_agent.load(online_ckpt)
+            print(f"[TxnAgent] Resumed from online checkpoint: {online_ckpt}", flush=True)
+        elif os.path.exists(meta_ckpt):
+            self.rl_agent.load(meta_ckpt)
+            print(f"[TxnAgent] Loaded meta-trained checkpoint: {meta_ckpt}", flush=True)
+        else:
+            print("[TxnAgent] No checkpoint found, starting fresh", flush=True)
 
         # Cross-iteration RL state tracking
-        self.prev_tput = None             # P_{t-1}
-        self.prev_abort_cost = None       # C_{t-1} = sum of per-partition abort ratios
-        self.baseline_tput = None         # P_0 (initial throughput)
-        self.baseline_abort_cost = None   # C_0 (initial total abort cost)
+        self.prev_tput = None
+        self.prev_abort_cost = None
+        self.baseline_tput = None
+        self.baseline_abort_cost = None
         self.prev_state = None
         self.prev_action_idx = None
         self.prev_action_params = None
@@ -59,11 +77,11 @@ class TxnAgent:
         self.iteration = 0
 
         # MAML online adaptation
-        self.adapted_params = None        # adapted actor params from inner_update
-        self.adaptation_steps = 4         # min buffer size before inner_update
+        self.adapted_params = None
+        self.adaptation_steps = 4
 
         # Experience buffer for online updates
-        self.update_interval = 16  # run meta-update every N steps
+        self.update_interval = 8
         self.experience_buffer = {
             'states': [],
             'action_types': [],
@@ -75,6 +93,9 @@ class TxnAgent:
             'values': [],
             'dones': [],
         }
+
+        # Transition buffer for offline training: list of (s, a, r, s') dicts
+        self.transition_buffer = []
 
         # Config output directory
         self.config_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'config', 'partition')
@@ -97,26 +118,69 @@ class TxnAgent:
             'update_avg_reward': [],
         }
 
-        self.init_partition_info(self.partition_cnt, self.marco_partition_capacity)
-        
-    def init_partition_info(self, count: int, capacity: int):
-        for i in range(count):
-            self.partition_info.append(PartitionNode(i, 0, 2, i * capacity, capacity=capacity))
+        self.init_partition_info()
+
+    def _load_partition_config(self, yaml_path: str):
+        """Read partition YAML and compute partition_cnt and marco_partition_capacity.
+
+        partition_cnt = sum(relation.partitionCount for all relations) / 8
+        marco_partition_capacity = {macro_idx: partitionSize * 8}
+        """
+        with open(yaml_path, 'r') as f:
+            data = yaml.safe_load(f)
+
+        workload_data = data.get('workload', data)
+        relations = workload_data.get('relations', [])
+
+        total_micro_partitions = 0
+        marco_capacity = {}  # macro_partition_idx -> capacity (partitionSize * 8)
+        macro_idx = 0
+
+        for rel in relations:
+            partition_size = rel['partitionSize']
+            partition_count = rel['partitionCount']
+            total_micro_partitions += partition_count
+            # Each macro partition groups 8 micro partitions
+            num_macro = partition_count // 8
+            capacity = partition_size * 8
+            for _ in range(num_macro):
+                marco_capacity[macro_idx] = capacity
+                macro_idx += 1
+
+        partition_cnt = total_micro_partitions // 8
+        print(f"[TxnAgent] Loaded partition config: {partition_cnt} macro partitions, "
+              f"capacities={marco_capacity}", flush=True)
+        return partition_cnt, marco_capacity
+
+    def init_partition_info(self):
+        key_offset = 0
+        for i in range(self.partition_cnt):
+            capacity = self.marco_partition_capacity[i]
+            self.partition_info.append(
+                PartitionNode(i, 0, 2, key_offset, capacity=capacity)
+            )
+            key_offset += capacity
 
 
     def service(self, filename: str, workload: str = None) -> str:
+        import time as _time
+        t_start = _time.perf_counter()
+
         if self.heuristic_selector is None:
             self.heuristic_selector = HeuristicSelector()
 
         self.iteration += 1
 
         # 1. Load workload characteristics
+        t0 = _time.perf_counter()
         graph = PartitionGraph()
-        self.load_graph_from_file(graph, filename)
+        self.load_graph_from_file(graph, filename, self.partition_info)
         current_tput = graph.tput
         current_abort = graph.abort_ratio
+        t_load = _time.perf_counter() - t0
 
         # Build feature lookup: partition_id -> feature tensor
+        t0 = _time.perf_counter()
         if self.USE_GRAPH_EMBEDDING:
             # GNN mode: compute graph embeddings
             if self.graph_encoder is None:
@@ -134,14 +198,20 @@ class TxnAgent:
                 nid: graph.nodes[nid].get_node_features()
                 for nid in graph.nodes
             }
+        t_embed = _time.perf_counter() - t0
 
         # 2. Reward calculation
+        t0 = _time.perf_counter()
         if self.baseline_tput is None:
-            # First call: establish baselines P_0, C_0
-            self.baseline_tput = current_tput
-            self.baseline_abort_cost = current_abort
-            print(f"[Iter {self.iteration}] baseline  "
-                  f"tput={current_tput:.1f}  abort_cost={current_abort:.4f}", flush=True)
+            if current_tput >= self.MIN_BASELINE_TPUT:
+                # System has warmed up — establish baselines P_0, C_0
+                self.baseline_tput = current_tput
+                self.baseline_abort_cost = current_abort
+                print(f"[Iter {self.iteration}] baseline set  "
+                      f"tput={current_tput:.1f}  abort_cost={current_abort:.4f}", flush=True)
+            else:
+                print(f"[Iter {self.iteration}] warm-up (tput={current_tput:.1f} "
+                      f"< {self.MIN_BASELINE_TPUT}), skipping", flush=True)
         elif self.prev_state is not None:
             reward = self.calculate_reward(current_tput, current_abort)
             print(f"[Iter {self.iteration}] reward={reward:.4f}  "
@@ -162,26 +232,56 @@ class TxnAgent:
             # Store experience from previous step
             self.store_experience(reward, done=False)
 
+            # Record (s, a, r, s') transition for offline training
+            current_state = None
+            for partition in [p for p in graph.nodes.values() if p.is_leaf or p.can_merge]:
+                if partition.p_id in embeddings:
+                    current_state = self.prepare_state(partition, embeddings[partition.p_id])
+                    break
+            self.transition_buffer.append({
+                'state': self.prev_state.detach().clone(),
+                'action_type': self.prev_action_idx,
+                'action_params': dict(self.prev_action_params),
+                'action_mask': self.prev_action_mask.detach().clone(),
+                'log_prob': self.prev_log_prob.detach().clone(),
+                'reward': reward,
+                'next_state': current_state.detach().clone() if current_state is not None else self.prev_state.detach().clone(),
+                'done': False,
+            })
+
             # Trigger PPO update when buffer is full
             if len(self.experience_buffer['rewards']) >= self.update_interval:
                 self.update_rl_agent()
         else:
             print(f"[Iter {self.iteration}] "
                   f"tput={current_tput:.1f}  abort_cost={current_abort:.4f}", flush=True)
+        t_reward = _time.perf_counter() - t0
 
         # 3. Select the most valuable partition to adjust
+        t0 = _time.perf_counter()
         partitions = [p for p in graph.nodes.values() if p.is_leaf or p.can_merge]
+
+        # Print partitions input to heuristic selector
+        print(f"[Iter {self.iteration}] Heuristic input partitions ({len(partitions)}):", flush=True)
+        for p in partitions:
+            print(f"  pid={p.p_id}  iso={p.isolation_level}  mu={p.mu}  "
+                  f"wi={p.workload_intensity:.4f}  leaf={p.is_leaf}", flush=True)
+
         partition_candidates = self.heuristic_selector.topK(partitions, K=1)
+        t_heuristic = _time.perf_counter() - t0
 
         # 4. MAML adaptation: use buffered experience as support set
+        t0 = _time.perf_counter()
         buf_size = len(self.experience_buffer['rewards'])
         if buf_size >= self.adaptation_steps:
             support_data = self._build_task_data()
             self.adapted_params = self.rl_agent.inner_update(support_data)
         else:
             self.adapted_params = None
+        t_maml = _time.perf_counter() - t0
 
         # 5. RL action decision + execution (using adapted params)
+        t0 = _time.perf_counter()
         for partition in partition_candidates:
             if partition.p_id not in embeddings:
                 continue
@@ -218,13 +318,20 @@ class TxnAgent:
             self.prev_action_params = parameters
             self.prev_log_prob = log_prob.detach()
             self.prev_action_mask = action_mask
+        t_action = _time.perf_counter() - t0
 
         # 6. Update metrics for next iteration
         self.prev_tput = current_tput
         self.prev_abort_cost = current_abort
 
+        t_total = _time.perf_counter() - t_start
+        print(f"[Iter {self.iteration}] TIMING  total={t_total*1000:.1f}ms  "
+              f"load={t_load*1000:.1f}ms  embed={t_embed*1000:.1f}ms  "
+              f"reward={t_reward*1000:.1f}ms  heuristic={t_heuristic*1000:.1f}ms  "
+              f"maml={t_maml*1000:.1f}ms  action={t_action*1000:.1f}ms", flush=True)
+
         # 7. Build response string for Java applyActions()
-        return self.format_response()
+        return self.format_response() + '\n'
 
 
     # ----------------------------------------------------------------
@@ -379,29 +486,62 @@ class TxnAgent:
             json.dump(export, f, indent=2)
 
         print(f"Metrics exported to: {filepath}", flush=True)
+
+        # Also save transitions for offline training
+        self.save_transitions()
+
         return filepath
+
+    def save_transitions(self):
+        """Save recorded (s, a, r, s') transitions to disk for offline MAML training."""
+        if len(self.transition_buffer) == 0:
+            print("No transitions to save.", flush=True)
+            return
+
+        from datetime import datetime
+        trans_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), '..', 'metas', 'transitions'
+        )
+        os.makedirs(trans_dir, exist_ok=True)
+
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filepath = os.path.join(trans_dir, f'transitions_{timestamp}.pt')
+        torch.save(self.transition_buffer, filepath)
+        print(f"Saved {len(self.transition_buffer)} transitions to: {filepath}", flush=True)
+
+    @staticmethod
+    def _safe_ratio(current: float, baseline: float) -> float:
+        """Compute (current - baseline) / baseline safely.
+
+        When baseline is near zero (< 1.0), return the raw difference
+        instead of dividing by a tiny number, which would blow up the
+        reward to astronomical values.
+        """
+        diff = current - baseline
+        if abs(baseline) < 1.0:
+            return diff  # raw difference, bounded by the metric range
+        return diff / baseline
 
     def calculate_reward(self, current_tput: float, current_abort_cost: float) -> float:
         """Paper reward: R = α · R_p - (1-α) · P_c
 
         R_p = η_p · (P_t - P_0)/P_0 + (1-η_p) · (P_t - P_{t-1})/P_{t-1}
         P_c = η_c · (C_t - C_0)/C_0 + (1-η_c) · (C_t - C_{t-1})/C_{t-1}
+
+        When baseline or previous values are near zero, raw differences
+        are used instead of ratios to keep rewards in a stable range.
         """
         alpha = self.REWARD_ALPHA
         eta_p = self.ETA_P
         eta_c = self.ETA_C
 
         # Performance gain R_p (long-term + short-term)
-        p0 = max(self.baseline_tput, 1e-8)
-        p_prev = max(self.prev_tput, 1e-8)
-        r_p = eta_p * (current_tput - self.baseline_tput) / p0 \
-            + (1 - eta_p) * (current_tput - self.prev_tput) / p_prev
+        r_p = eta_p * self._safe_ratio(current_tput, self.baseline_tput) \
+            + (1 - eta_p) * self._safe_ratio(current_tput, self.prev_tput)
 
         # Correctness violation P_c (long-term + short-term)
-        c0 = max(self.baseline_abort_cost, 1e-8)
-        c_prev = max(self.prev_abort_cost, 1e-8)
-        p_c = eta_c * (current_abort_cost - self.baseline_abort_cost) / c0 \
-            + (1 - eta_c) * (current_abort_cost - self.prev_abort_cost) / c_prev
+        p_c = eta_c * self._safe_ratio(current_abort_cost, self.baseline_abort_cost) \
+            + (1 - eta_c) * self._safe_ratio(current_abort_cost, self.prev_abort_cost)
 
         return alpha * r_p - (1 - alpha) * p_c
 
@@ -494,7 +634,7 @@ class TxnAgent:
             mu = int(params.get('mu', partition.mu))
             partition.isolation_level = iso
             partition.mu = mu
-            partition.merge()
+            partition.merge(iso, mu)
 
         elif action_name == 'change_iso' and partition.is_leaf:
             iso = int(params.get('iso', partition.isolation_level))
@@ -702,7 +842,7 @@ class TxnAgent:
 
 
     def load_graph_from_file(self, graph: PartitionGraph, filename: str, partition_info: list[PartitionNode] = []):
-        with open(filename, "r", encoding="utf-8") as f:
+        with open(filename.strip(), "r", encoding="utf-8") as f:
             lines = [line.strip() for line in f if line.strip()]
 
         if not lines:
@@ -710,13 +850,14 @@ class TxnAgent:
         
         if len(partition_info) == 0:
             for i in range(self.partition_cnt):
-                node = PartitionNode(i, 0, 2, i * 8192)
+                capacity = self.marco_partition_capacity[i]
+                node = PartitionNode(i, 0, 2, i * capacity, capacity=capacity)
                 if random.random() < 0.5:
-                    node.split()
+                    node.split(0, 2, 0, 2)
                     if random.random() < 0.5:
-                        node.left.split()
+                        node.left.split(0, 2, 0, 2)
                     if random.random() < 0.5:
-                        node.right.split()
+                        node.right.split(0, 2, 0, 2)
                 partition_info.append(node)
         
         # ---- parse head ----
@@ -776,6 +917,9 @@ class TxnAgent:
 
 
     def recursive_add_node(self, graph: PartitionGraph, p: PartitionNode):
+        if p.is_leaf:
+            graph.add_partition(p)
+            return
         if p.can_merge:
             graph.add_partition(p)
             graph.add_partition(p.left)
@@ -783,5 +927,5 @@ class TxnAgent:
             graph.add_edge(p.p_id, p.left.p_id)
             graph.add_edge(p.p_id, p.right.p_id)
         else:
-            self.recursive_add_node(p.left)
-            self.recursive_add_node(p.right)
+            self.recursive_add_node(graph, p.left)
+            self.recursive_add_node(graph, p.right)

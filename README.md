@@ -1,6 +1,6 @@
 # TxnAgent
 
-The code base of TxnAgent: Achieving Serializable **Transaction** Scheduling with **S**elf-**A**daptive **I**solation **L**evel **S**election.
+The code base of TxnAgent: Achieve Efficient Serializability via Self-adaptive Fine-Grained Isolation Level Selection.
 
 ## Brief Introduction
 
@@ -25,13 +25,13 @@ Key modules and corresponding source code:
 | **RL Agent** | `agent/agent.py`, `agent/rl_model.py`, `adapter.py` |
 | **Partition** | `src/.../execution/isolation/PartitionManager.java`, `PartitionConfig.java` |
 
-> Note: `...` represents the filepath `main/java/org/dbiir/txnsails`.
+> Note: `...` represents the filepath `main/java/org/dbiir/txnagent`.
 
 ## Prerequisites
 
 - **JDK 21** and **Gradle 9+**
 - **Python 3.9+** with packages: `torch`, `numpy`, `tensorboard`
-- **PostgreSQL 15+** (with data pre-loaded for your benchmark)
+- **PostgreSQL 17+** (with data pre-loaded for your benchmark)
 
 ## How to Build
 
@@ -63,7 +63,7 @@ python3 adapter.py -w ycsb
 
 This starts the Python RL agent, which:
 - Initializes the MAML-based PPO model
-- Loads a pre-trained checkpoint from `models/best_meta_ppo.pt` (if available)
+- Loads checkpoint (priority: `models/final_online.pt` → `models/best_meta_ppo.pt` → fresh start)
 - Listens on **port 7654** for the Java `StatisticsWorker` connection
 
 **Arguments:**
@@ -134,3 +134,19 @@ python3 run_tests.py -w ycsb -e postgresql -f skew-128
 ```
 
 See `python3 run_tests.py -h` for all options.
+
+## Offline Meta-Training
+
+Transitions `(s, a, r, s')` are automatically recorded during online runs and saved to `metas/transitions/` on shutdown. To run offline MAML meta-training:
+
+```shell
+python -m agent.offline_train_rl --data_dir metas/transitions --epochs 200
+```
+
+## Log Analysis
+
+Parse adapter logs to extract throughput, reward, and action metrics:
+
+```shell
+python parse_adapter_log.py <logfile> --csv metrics.csv --plot
+```

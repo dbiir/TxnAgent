@@ -7,7 +7,7 @@ from agent.partition import PartitionNode
 
 class PartitionGraph:
     """Partition graph structure representing relationships between partitions"""
-    def __init__(self, node_cnt: int):
+    def __init__(self):
         self.nodes: Dict[int, PartitionNode] = {}
         self.edges: Dict[Tuple[int, int], int] = {}  # Edge weights: distributed transaction counts
         self.tput: float

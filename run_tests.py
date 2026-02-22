@@ -21,13 +21,14 @@ import subprocess
 from datetime import datetime
 
 # ---------------------------------------------------------------------------
-# Paths
+# Paths — run_tests.py, TriStar/, TxnSailsServer/ are siblings
 # ---------------------------------------------------------------------------
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
-TRISTAR_DIR = os.path.join(PROJECT_DIR, "target", "tristar", "tristar")
+SERVER_DIR = os.path.join(PROJECT_DIR, "TxnSailsServer")
+TRISTAR_DIR = os.path.join(PROJECT_DIR, "TriStar")
 
-PREFIX_CMD_SERVER = "java -jar build/libs/TxnSailsServer-fat-2.0-all.jar"
-PREFIX_CMD_CLIENT = f"java -cp {TRISTAR_DIR}/lib/ -jar {TRISTAR_DIR}/tristar.jar"
+PREFIX_CMD_SERVER = f"java -jar {SERVER_DIR}/build/libs/TxnSailsServer-fat-2.0-all.jar"
+PREFIX_CMD_CLIENT = f"java -cp {TRISTAR_DIR}/target/tristar/tristar/lib/ -jar {TRISTAR_DIR}/target/tristar/tristar/tristar.jar"
 
 RESULT_DIR = os.path.join(PROJECT_DIR, "results")
 META_DIR = os.path.join(PROJECT_DIR, "metas")
@@ -39,7 +40,7 @@ FUNCTIONS = [
     "skew-64", "bal_ratio-128", "wc_ratio-128", "random-128", "no_ratio-128",
     "pa_ratio-128", "wr_ratio-128", "distributed-128", "wr_ratio-64",
     "distributed-64", "dynamic-128", "switch-128", "scalability_p",
-    "wr_ratio-128_p", "skew-128_p",
+    "wr_ratio-128_p", "skew-128_p", "online"
 ]
 STRATEGIES = ["SERIALIZABLE", "SI_TAILOR", "RC_TAILOR"]
 
@@ -47,29 +48,37 @@ STRATEGIES = ["SERIALIZABLE", "SI_TAILOR", "RC_TAILOR"]
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def run_shell_command(cmd: str, timeout: int = 600):
+def run_shell_command(cmd: str, timeout: int = 600, cwd: str = None, log_file: str = None):
     """Run a shell command with a timeout. Returns the exit code."""
     print(f"[CMD] {cmd}", flush=True)
-    process = subprocess.Popen(cmd, shell=True, preexec_fn=os.setsid)
+    fh = None
+    if log_file:
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+        fh = open(log_file, "w")
+    process = subprocess.Popen(cmd, shell=True, preexec_fn=os.setsid, cwd=cwd,
+                               stdout=fh, stderr=subprocess.STDOUT if fh else None)
     try:
         process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         os.killpg(process.pid, signal.SIGTERM)
         process.communicate()
         print("[WARN] Command timed out and was killed.", flush=True)
+    finally:
+        if fh:
+            fh.close()
     return process.returncode
 
 
-def start_background(cmd: str, log_file: str = None):
+def start_background(cmd: str, log_file: str = None, cwd: str = None):
     """Start a process in the background. Returns the Popen object."""
     print(f"[BG ] {cmd}", flush=True)
     if log_file:
         os.makedirs(os.path.dirname(log_file), exist_ok=True)
         fh = open(log_file, "w")
         proc = subprocess.Popen(cmd, shell=True, preexec_fn=os.setsid,
-                                stdout=fh, stderr=subprocess.STDOUT)
+                                stdout=fh, stderr=subprocess.STDOUT, cwd=cwd)
     else:
-        proc = subprocess.Popen(cmd, shell=True, preexec_fn=os.setsid)
+        proc = subprocess.Popen(cmd, shell=True, preexec_fn=os.setsid, cwd=cwd)
     return proc
 
 
@@ -89,7 +98,7 @@ def kill_process(proc: subprocess.Popen):
 
 def get_config_files(workload: str, func: str, engine: str) -> list[str]:
     """Find all .xml config files for a given function/engine."""
-    config_dir = os.path.join(PROJECT_DIR, "config", workload, func, engine)
+    config_dir = os.path.join(TRISTAR_DIR, "config", workload, func, engine)
     if not os.path.isdir(config_dir):
         print(f"[WARN] Config directory not found: {config_dir}", flush=True)
         return []
@@ -120,14 +129,14 @@ def run_once(args, func: str, pconfig_path: str = "") -> str:
     """Run one round of tests for a given function."""
     unique_ts = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
 
-    config_path_local = os.path.join("config", f"{args.wl}.xml")
-    schema_path_local = os.path.join("config", f"{args.wl}.sql")
+    config_path_local = os.path.join(SERVER_DIR, "config", f"{args.wl}.xml")
+    schema_path_local = os.path.join(SERVER_DIR, "config", f"{args.wl}.sql")
 
     # Partition files
     if pconfig_path:
         partition_file_list = get_partition_files(pconfig_path)
     else:
-        partition_file_list = [f"config/partition/{args.wl}/partition.yaml"]
+        partition_file_list = [os.path.join(SERVER_DIR, "config", "partition", args.wl, "partition.yaml")]
 
     config_files = get_config_files(args.wl, func, args.engine)
     if not config_files:
@@ -170,8 +179,8 @@ def run_once(args, func: str, pconfig_path: str = "") -> str:
             try:
                 # -- Step 1: Start adapter (RL agent) first --
                 adapter_log = os.path.join(log_base, "adapter.log")
-                adapter_cmd = f"python3 adapter.py -w {args.wl}"
-                adapter_proc = start_background(adapter_cmd, adapter_log)
+                adapter_cmd = f"python3 {SERVER_DIR}/adapter.py -w {args.wl}"
+                adapter_proc = start_background(adapter_cmd, adapter_log, cwd=SERVER_DIR)
                 time.sleep(3)  # wait for adapter to start listening
 
                 # -- Step 2: Start TxnSailsServer --
@@ -184,7 +193,7 @@ def run_once(args, func: str, pconfig_path: str = "") -> str:
                     f" -t {partition_file}"
                     f" -p offline"
                 )
-                server_proc = start_background(server_cmd, server_log)
+                server_proc = start_background(server_cmd, server_log, cwd=SERVER_DIR)
                 time.sleep(15)  # wait for server to initialize
 
                 # -- Step 3: Run TriStar client (blocking) --
@@ -196,7 +205,7 @@ def run_once(args, func: str, pconfig_path: str = "") -> str:
                     f" --execute=true"
                     f" -d {result_subdir}/{case_name}"
                 )
-                run_shell_command(f"{client_cmd} > {client_log} 2>&1", timeout=600)
+                run_shell_command(client_cmd, timeout=600, cwd=TRISTAR_DIR, log_file=client_log)
 
                 print(f"[DONE] {case_name}", flush=True)
                 time.sleep(5)

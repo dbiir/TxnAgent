@@ -6,6 +6,8 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.dbiir.txnagent.common.AsyncResultWrapper;
@@ -24,8 +26,7 @@ public class TransactionManager {
   private String workload;
   private StatisticsWorker statisticsWorker;
   // active transaction list
-  private final List<List<Transaction>> activeTransactionList =
-      new ArrayList<>(TRANSACTION_HASH_SIZE);
+  private final List<List<Transaction>> activeTransactionList = new ArrayList<>(TRANSACTION_HASH_SIZE);
   private final List<ReadWriteLock> activeTransactionLocks = new ArrayList<>(TRANSACTION_HASH_SIZE);
 
   // data item metadata, including hot, medium, low contention items
@@ -58,28 +59,63 @@ public class TransactionManager {
     boolean hybridTransaction = transaction.getParticipants().size() > 1;
     boolean readOnly = transaction.readOnly();
 
+    // Phase 1: validate all participants
     for (Participant p : transaction.getParticipants()) {
       p.validate(transaction);
       p.setValidationStatus(ValidationStatus.VALIDATED);
+    }
 
-      // serial execution
-      if (hybridTransaction && !readOnly) {
-        try (PreparedStatement prepare =
-            p.getConnection()
-                .prepareStatement(
-                    "PREPARE TRANSACTION '"
-                        + transaction.getId()
-                        + "-"
-                        + p.getIsolationLevel()
-                        + "'"); ) {
-          prepare.execute();
-          p.setStatus(TransactionStatus.PREPARED);
-        } catch (SQLException ex) {
-          p.setStatus(TransactionStatus.PREPARE_FAILED);
-          throw ex;
-        }
+    // Phase 2: send all PREPARE TRANSACTION statements in parallel
+    if (hybridTransaction && !readOnly) {
+      List<Participant> participants = transaction.getParticipants();
+      AtomicReference<SQLException> firstException = new AtomicReference<>();
+      List<CompletableFuture<Void>> futures = new ArrayList<>(participants.size() - 1);
+
+      // Submit participants 1..n-1 to async pool
+      for (int i = 1; i < participants.size(); i++) {
+        Participant p = participants.get(i);
+        CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+          try (PreparedStatement stmt = p.getConnection()
+              .prepareStatement(
+                  "PREPARE TRANSACTION '"
+                      + transaction.getId()
+                      + "-"
+                      + p.getIsolationLevel()
+                      + "'")) {
+            stmt.execute();
+            p.setStatus(TransactionStatus.PREPARED);
+          } catch (SQLException ex) {
+            p.setStatus(TransactionStatus.PREPARE_FAILED);
+            firstException.compareAndSet(null, ex);
+          }
+        });
+        futures.add(future);
+      }
+
+      // Current thread executes participant 0
+      Participant p0 = participants.get(0);
+      try (PreparedStatement stmt = p0.getConnection()
+          .prepareStatement(
+              "PREPARE TRANSACTION '"
+                  + transaction.getId()
+                  + "-"
+                  + p0.getIsolationLevel()
+                  + "'")) {
+        stmt.execute();
+        p0.setStatus(TransactionStatus.PREPARED);
+      } catch (SQLException ex) {
+        p0.setStatus(TransactionStatus.PREPARE_FAILED);
+        firstException.compareAndSet(null, ex);
+      }
+
+      // Wait for async branches to complete
+      CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+
+      if (firstException.get() != null) {
+        throw firstException.get();
       }
     }
+
     transaction.setCommitTimestamp(transaction.getLowerBound());
   }
 
@@ -95,19 +131,20 @@ public class TransactionManager {
       if (p.getConnection() != null) {
         try {
           if (p.getStatus() == TransactionStatus.PREPARED) {
-            PreparedStatement prepare =
-                p.getConnection()
-                    .prepareStatement(
-                        "COMMIT PREPARED '"
-                            + transaction.getId()
-                            + "-"
-                            + p.getIsolationLevel()
-                            + "'");
+            PreparedStatement prepare = p.getConnection()
+                .prepareStatement(
+                    "COMMIT PREPARED '"
+                        + transaction.getId()
+                        + "-"
+                        + p.getIsolationLevel()
+                        + "'");
             prepare.execute();
           } else if (p.getStatus() == TransactionStatus.ACTIVE) {
             PreparedStatement prepare = p.getConnection().prepareStatement("COMMIT");
             prepare.execute();
           }
+          transaction.doAfterCommit(getMinActiveTransactionId());
+          statisticsWorker.recordTransaction(transaction, true);
         } catch (SQLException ex) {
           if (p.getStatus() == TransactionStatus.PREPARED) {
             logger.error("Commit failed !!!", ex);
@@ -118,8 +155,6 @@ public class TransactionManager {
         logger.error("Cannot find the connection");
       }
     }
-    transaction.doAfterCommit(getMinActiveTransactionId());
-    //      statisticsWorker.recordTransaction(transaction, true);
   }
 
   public void rollback(Transaction transaction, AsyncResultWrapper[] results) {
@@ -127,14 +162,13 @@ public class TransactionManager {
       if (p.getConnection() != null) {
         try {
           if (p.getStatus() == TransactionStatus.PREPARED) {
-            PreparedStatement prepare =
-                p.getConnection()
-                    .prepareStatement(
-                        "ROLLBACK PREPARED '"
-                            + transaction.getId()
-                            + "-"
-                            + p.getIsolationLevel()
-                            + "'");
+            PreparedStatement prepare = p.getConnection()
+                .prepareStatement(
+                    "ROLLBACK PREPARED '"
+                        + transaction.getId()
+                        + "-"
+                        + p.getIsolationLevel()
+                        + "'");
             prepare.execute();
           } else if (p.getStatus() == TransactionStatus.PREPARE_FAILED
               || p.getStatus() == TransactionStatus.ACTIVE) {
@@ -155,7 +189,7 @@ public class TransactionManager {
       }
     }
     transaction.doAfterRollback();
-    //      statisticsWorker.recordTransaction(transaction, false);
+    statisticsWorker.recordTransaction(transaction, false);
   }
 
   public void addTransaction(Transaction txn) {

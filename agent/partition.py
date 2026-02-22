@@ -5,8 +5,25 @@ from typing import List, Dict, Tuple, Optional
 
 class PartitionNode:
     """Partition node class corresponding to vertex V in the graph"""
+    _next_id = 0  # class-level global unique ID counter
+
+    @classmethod
+    def allocate_id(cls) -> int:
+        """Allocate the next globally unique partition ID."""
+        pid = cls._next_id
+        cls._next_id += 1
+        return pid
+
+    @classmethod
+    def reset_id_counter(cls, start: int = 0):
+        """Reset the global ID counter (e.g. at init time)."""
+        cls._next_id = start
+
     def __init__(self, p_id: int, isolation_level: int, mu: int, key_range_start: int, capacity: int = 8192):
         self.p_id = p_id # macro partition id
+        # Track the max ID we've seen so the counter stays ahead
+        if p_id >= PartitionNode._next_id:
+            PartitionNode._next_id = p_id + 1
         self.isolation_level = isolation_level  # 0:SER, 1:SI, 2:RC
         self.mu = mu  # parameter for timestamp interval adjustment
         self.key_range_start = key_range_start
@@ -33,6 +50,13 @@ class PartitionNode:
         """Get node feature vector by aggregating micro-partition features"""
         # concat each micro-partition feature to form node feature
         return self.micro_partition_features.view(-1)  # shape: [32]
+
+    @property
+    def workload_intensity(self) -> float:
+        """Average workload intensity across active micro-partitions (feature index 2)."""
+        start = int(self.p_start)
+        end = int(self.p_end)
+        return self.micro_partition_features[start:end, 2].max().item()
     
     def is_includess_micro_partition(self, micro_idx: int) -> bool:
         return self.p_start <= micro_idx < self.p_end
@@ -78,15 +102,17 @@ class PartitionNode:
         p_cnt = self.max_micro_partitions / np.power(2, self.level_from_top - 1)
         if p_cnt == 1:  # leaf node cannot split further
             return
-                
-        left = PartitionNode(self.p_id * 2, iso_l, mu_l, self.key_range_start, self.capcity // 2)
+        
+        left_id = PartitionNode.allocate_id()
+        left = PartitionNode(left_id, iso_l, mu_l, self.key_range_start, self.capacity // 2)
         left.father = self
         left.level_from_top = self.level_from_top + 1
         left.micro_partition_features = torch.zeros(self.max_micro_partitions, 4)
         for i in range(int(p_cnt // 2)):
             left.micro_partition_features[int(self.p_start + i)] = self.micro_partition_features[int(self.p_start + i)]
         
-        right = PartitionNode(self.p_id * 2 + 1, iso_r, mu_r, self.key_range_start + self.capcity // 2, self.capcity // 2)
+        right_id = PartitionNode.allocate_id()
+        right = PartitionNode(right_id, iso_r, mu_r, self.key_range_start + self.capacity // 2, self.capacity // 2)
         right.father = self
         right.level_from_top = self.level_from_top + 1
         right.micro_partition_features = torch.zeros(self.max_micro_partitions, 4)
@@ -104,14 +130,17 @@ class PartitionNode:
             self.father.can_merge = False        
 
 
-    def merge(self):
+    def merge(self, iso, mu):
         if not self.can_merge:
             print("Error: cannot merge non-mergeable partition")
             return
         
         self.is_leaf = True
+        self.can_merge = False  # now a leaf — cannot merge again
         if self.father is not None:
             self.father.can_merge = True
         
         self.left = None
         self.right = None
+        self.isolation_level = iso
+        self.mu = mu

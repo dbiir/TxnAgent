@@ -6,6 +6,8 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.random.RandomGenerator;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -47,6 +49,12 @@ public class StatisticsWorker implements Runnable {
   // Reset each cycle by reset().
   private final AtomicInteger abortedCount = new AtomicInteger(0);
 
+  // intervalTotalCount: incremented for EVERY txn (committed + aborted, 100%).
+  // Used as denominator for interval-level abort ratio.
+  // Unlike committedCount (reset by scheduler each tick), this accumulates
+  // over the full interval and is reset only by reset().
+  private final AtomicInteger intervalTotalCount = new AtomicInteger(0);
+
   // sampledTxnCount: incremented for 10%-sampled txns (committed OR aborted).
   // Used as the denominator for per-partition workloadIntensity.
   // Reset each cycle by reset().
@@ -54,6 +62,7 @@ public class StatisticsWorker implements Runnable {
   // ──────────────────────────────────────────────────────────────
 
   private final List<Integer> throughputHistory = new ArrayList<>();
+  private final ReadWriteLock throughputLock = new ReentrantReadWriteLock();
   private final AtomicLong lastReportTime = new AtomicLong(System.currentTimeMillis());
   private final String workload;
 
@@ -118,7 +127,9 @@ public class StatisticsWorker implements Runnable {
       String data = in.readLine();
       logger.debug("Receive the prediction result: {}", data);
 
-      applyActions(data);
+      if (data != null && !data.isEmpty()) {
+        applyActions(data);
+      }
 
       // sleep for next round
       try {
@@ -173,6 +184,7 @@ public class StatisticsWorker implements Runnable {
    */
   public void recordTransaction(Transaction transaction, boolean committed) {
     // 100% counters — used for throughput and abort ratio
+    intervalTotalCount.incrementAndGet();
     if (committed) {
       committedCount.incrementAndGet();
     } else {
@@ -253,15 +265,21 @@ public class StatisticsWorker implements Runnable {
     }
     // Average throughput over last 5 seconds (matches the adjustment interval)
     double avgThroughput = 0;
-    int windowSize = Math.min(throughputHistory.size(), INTERVAL_SECONDS);
-    if (windowSize > 0) {
-      for (int k = throughputHistory.size() - windowSize; k < throughputHistory.size(); k++) {
-        avgThroughput += throughputHistory.get(k);
+    throughputLock.readLock().lock();
+    try {
+      int windowSize = Math.min(throughputHistory.size(), INTERVAL_SECONDS);
+      if (windowSize > 0) {
+        for (int k = throughputHistory.size() - windowSize; k < throughputHistory.size(); k++) {
+          avgThroughput += throughputHistory.get(k);
+        }
+        avgThroughput /= windowSize;
       }
-      avgThroughput /= windowSize;
+    } finally {
+      throughputLock.readLock().unlock();
     }
-    // Per-interval abort ratio: aborted / (committed + aborted)
-    int totalThisInterval = committedCount.get() + abortedCount.get();
+    // Per-interval abort ratio: aborted / total (both accumulated over full
+    // interval)
+    int totalThisInterval = intervalTotalCount.get();
     double abortRatio = totalThisInterval > 0 ? 1.0 * abortedCount.get() / totalThisInterval : 0.0;
 
     String head = String.format(headFormat, maxPartitionId, edgeCount, avgThroughput, abortRatio);
@@ -287,9 +305,14 @@ public class StatisticsWorker implements Runnable {
           // Compute per-second throughput and reset the counter
           int committed = committedCount.getAndSet(0);
           double throughput = 1000.0 * committed / Math.max(elapsed, 1);
-          throughputHistory.add((int) throughput);
-          if (throughputHistory.size() > 60) {
-            throughputHistory.removeFirst();
+          throughputLock.writeLock().lock();
+          try {
+            throughputHistory.add((int) throughput);
+            if (throughputHistory.size() > 60) {
+              throughputHistory.removeFirst();
+            }
+          } finally {
+            throughputLock.writeLock().unlock();
           }
         },
         10,
@@ -315,6 +338,7 @@ public class StatisticsWorker implements Runnable {
     }
     sampledTxnCount.set(0);
     abortedCount.set(0);
+    intervalTotalCount.set(0);
   }
 
   /*

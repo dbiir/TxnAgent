@@ -13,7 +13,8 @@ class HeuristicSelector:
         
     def get_lambda(self):
         time_escaped = (time.time_ns() - self.execution_time) / 1e9
-        # $\lambda = 2 / (e^{t} + e^{-t})$
+        # sech(t) = 2 / (e^t + e^-t); clamp to avoid overflow (sech(700) ≈ 0)
+        time_escaped = min(time_escaped, 700)
         return 2 / (math.exp(time_escaped) + math.exp(-time_escaped))
         
     def calculate_partition_score(self, p: PartitionNode):
@@ -45,3 +46,5 @@ class HeuristicSelector:
         for p in partitions:
             if p.p_id in selected_partitions:
                 result.append(p)
+
+        return result

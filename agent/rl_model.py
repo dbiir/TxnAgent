@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Categorical, Normal
-from torch.nn.utils.stateless import functional_call
+from torch.func import functional_call
 import random
 
 
