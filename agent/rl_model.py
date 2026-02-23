@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Categorical, Normal
 from torch.func import functional_call
+import math
 import random
 
 
@@ -22,8 +23,9 @@ class MultiHeadParameterizedActor(nn.Module):
     def __init__(self, state_dim, hidden_dim=128):
         super().__init__()
 
-        # Shared feature extractor
+        # Shared feature extractor (LayerNorm normalizes raw inputs)
         self.shared = nn.Sequential(
+            nn.LayerNorm(state_dim),
             nn.Linear(state_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
@@ -158,32 +160,41 @@ class MultiHeadParameterizedActor(nn.Module):
 
         action_logits = out['action_logits']
 
+        # NaN guard: replace NaN logits with zeros (uniform fallback)
+        if torch.isnan(action_logits).any():
+            print("[WARN] NaN detected in action_logits, falling back to uniform", flush=True)
+            action_logits = torch.zeros_like(action_logits)
+
         # Apply action mask (set masked logits to -inf)
         if action_mask is not None:
             action_logits = action_logits + (1 - action_mask) * (-1e8)
 
         action_type_dist = Categorical(logits=action_logits)
 
-        mu_std = self.log_std_mu.exp()
+        mu_std = torch.nan_to_num(self.log_std_mu, nan=0.0).exp().clamp(min=1e-6)
 
         param_dists = {}
         p = out['parameters']
 
+        def _safe(t):
+            """Replace NaN/Inf with zeros to prevent distribution errors."""
+            return torch.where(torch.isfinite(t), t, torch.zeros_like(t))
+
         param_dists['split'] = {
-            'iso_l': Categorical(logits=p['split']['iso_l_logits']),
-            'mu_l': Normal(p['split']['mu_l_mean'], mu_std),
-            'iso_r': Categorical(logits=p['split']['iso_r_logits']),
-            'mu_r': Normal(p['split']['mu_r_mean'], mu_std),
+            'iso_l': Categorical(logits=_safe(p['split']['iso_l_logits'])),
+            'mu_l': Normal(_safe(p['split']['mu_l_mean']), mu_std),
+            'iso_r': Categorical(logits=_safe(p['split']['iso_r_logits'])),
+            'mu_r': Normal(_safe(p['split']['mu_r_mean']), mu_std),
         }
         param_dists['merge'] = {
-            'iso': Categorical(logits=p['merge']['iso_logits']),
-            'mu': Normal(p['merge']['mu_mean'], mu_std),
+            'iso': Categorical(logits=_safe(p['merge']['iso_logits'])),
+            'mu': Normal(_safe(p['merge']['mu_mean']), mu_std),
         }
         param_dists['change_iso'] = {
-            'iso': Categorical(logits=p['change_iso']['iso_logits']),
+            'iso': Categorical(logits=_safe(p['change_iso']['iso_logits'])),
         }
         param_dists['adjust_interval'] = {
-            'mu': Normal(p['adjust_interval']['mu_mean'], mu_std),
+            'mu': Normal(_safe(p['adjust_interval']['mu_mean']), mu_std),
         }
 
         return action_type_dist, param_dists
@@ -201,6 +212,7 @@ class Critic(nn.Module):
     def __init__(self, state_dim, hidden_dim=128):
         super().__init__()
         self.net = nn.Sequential(
+            nn.LayerNorm(state_dim),
             nn.Linear(state_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim // 2),
@@ -358,7 +370,10 @@ class MetaPPO:
 
         log_probs = type_lp + param_lp
 
-        ratio = torch.exp(log_probs - old_log_probs)
+        # Clamp log-ratio to prevent exp() overflow → inf → NaN weights
+        log_ratio = (log_probs - old_log_probs).clamp(-20, 20)
+        print("log_ratio: ", log_ratio)
+        ratio = torch.exp(log_ratio)
 
         surr1 = ratio * advantages
         surr2 = torch.clamp(
@@ -443,11 +458,18 @@ class MetaPPO:
 
         meta_loss /= len(task_batch)
 
+        # Skip update if loss is inf/NaN to prevent weight corruption
+        loss_val = meta_loss.item()
+        if not math.isfinite(loss_val):
+            print(f"[WARN] meta_loss={loss_val}, skipping update", flush=True)
+            return loss_val
+
         self.meta_optimizer.zero_grad()
         meta_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=0.5)
         self.meta_optimizer.step()
 
-        return meta_loss.item()
+        return loss_val
 
     # --------------------------------------------------------
     # Critic Update (standard shared critic)
@@ -460,6 +482,7 @@ class MetaPPO:
 
         self.critic_optimizer.zero_grad()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=0.5)
         self.critic_optimizer.step()
 
         return loss.item()

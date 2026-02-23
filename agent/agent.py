@@ -261,11 +261,13 @@ class TxnAgent:
         t0 = _time.perf_counter()
         partitions = [p for p in graph.nodes.values() if p.is_leaf or p.can_merge]
 
-        # Print partitions input to heuristic selector
-        print(f"[Iter {self.iteration}] Heuristic input partitions ({len(partitions)}):", flush=True)
-        for p in partitions:
-            print(f"  pid={p.p_id}  iso={p.isolation_level}  mu={p.mu}  "
-                  f"wi={p.workload_intensity:.4f}  leaf={p.is_leaf}", flush=True)
+        # Print per-partition isolation + overall metrics
+        iso_names = {0: 'RC', 1: 'SI', 2: 'SER'}
+        leaf_parts = [p for p in graph.nodes.values() if p.is_leaf]
+        iso_summary = '  '.join(f"p{p.p_id}={iso_names.get(p.isolation_level, p.isolation_level)}"
+                                for p in sorted(leaf_parts, key=lambda x: x.p_id))
+        print(f"[Iter {self.iteration}] tput={graph.tput:.1f}  abort={graph.abort_ratio:.4f}  "
+              f"partitions=[{iso_summary}]", flush=True)
 
         partition_candidates = self.heuristic_selector.topK(partitions, K=1)
         t_heuristic = _time.perf_counter() - t0
