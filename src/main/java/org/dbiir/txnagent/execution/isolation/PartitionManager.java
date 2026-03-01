@@ -29,7 +29,8 @@ public class PartitionManager {
   private final HashMap<String, Integer> relationToPartitionSize;
   private final HashMap<String, Integer> relationToPartitionCount;
   private final ArrayList<PartitionInfo> partitions; // partitionId -> PartitionInfo
-  @Getter private String workload;
+  @Getter
+  private String workload;
   private long startTime = 0L;
 
   static {
@@ -47,8 +48,7 @@ public class PartitionManager {
   public void init(String workload, String configFile) {
     try {
       this.partitionConfig = new PartitionConfig().load(configFile);
-      this.staticConfig =
-          (this.partitionConfig.getStages() != null && !this.partitionConfig.getStages().isEmpty());
+      this.staticConfig = (this.partitionConfig.getStages() != null && !this.partitionConfig.getStages().isEmpty());
 
       for (PartitionConfig.Relation relationConfig : this.partitionConfig.getRelations()) {
         this.relationToPartitionSize.put(
@@ -98,8 +98,7 @@ public class PartitionManager {
         }
         break;
       case "smallbank":
-        for (Map.Entry<String, Integer> entry :
-            SmallBankConstants.TABLENAME_TO_HASH_SIZE.entrySet()) {
+        for (Map.Entry<String, Integer> entry : SmallBankConstants.TABLENAME_TO_HASH_SIZE.entrySet()) {
           if (entry.getValue() <= 0) {
             continue;
           }
@@ -131,6 +130,10 @@ public class PartitionManager {
     return this.partitions.get(partitionId).getLevel();
   }
 
+  public int getPartitionSize(String relationName) {
+    return this.relationToPartitionSize.getOrDefault(relationName, 1);
+  }
+
   private void createItemTable(String relationName, int bucketSize) {
     tableToDataItemGuards.put(relationName, new ArrayList<>(bucketSize));
     tableToDataItems.put(relationName, new ArrayList<>(bucketSize));
@@ -159,9 +162,8 @@ public class PartitionManager {
     int partitionId = getPartitionId(validationMeta);
     IsolationLevelType isolationLevelType = IsolationLevelType.SER;
     if (staticConfig) {
-      isolationLevelType =
-          partitionConfig.getIsolationLevel(
-              (System.currentTimeMillis() - startTime) / 1000, partitionId);
+      isolationLevelType = partitionConfig.getIsolationLevel(
+          (System.currentTimeMillis() - startTime) / 1000, partitionId);
     } else {
       isolationLevelType = partitions.get(partitionId).getLevel();
     }
@@ -240,9 +242,8 @@ public class PartitionManager {
   }
 
   public DataItem getAndAddDataItem(ValidationMeta validationMeta) {
-    int bucketNum =
-        validationMeta.getIdForValidation()
-            % getHashSizeByRelationName(validationMeta.getRelationName());
+    int bucketNum = validationMeta.getIdForValidation()
+        % getHashSizeByRelationName(validationMeta.getRelationName());
     ReadWriteLock lock = tableToDataItemGuards.get(validationMeta.getRelationName()).get(bucketNum);
     lock.readLock().lock();
     for (DataItem item : tableToDataItems.get((validationMeta.getRelationName())).get(bucketNum)) {
@@ -254,9 +255,8 @@ public class PartitionManager {
     lock.readLock().unlock();
     int partitionId = getPartitionId(validationMeta);
     lock.writeLock().lock();
-    DataItem item =
-        new DataItem(
-            validationMeta.getIdForValidation(), partitionId, validationMeta.getRelationName());
+    DataItem item = new DataItem(
+        validationMeta.getIdForValidation(), partitionId, validationMeta.getRelationName());
     tableToDataItems.get((validationMeta.getRelationName())).get(bucketNum).add(item);
     lock.writeLock().unlock();
     return item;

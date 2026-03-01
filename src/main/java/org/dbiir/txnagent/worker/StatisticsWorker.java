@@ -18,6 +18,7 @@ import org.dbiir.txnagent.common.constants.TPCCConstants;
 import org.dbiir.txnagent.common.constants.YCSBConstants;
 import org.dbiir.txnagent.common.types.IsolationLevelType;
 import org.dbiir.txnagent.execution.isolation.Participant;
+import org.dbiir.txnagent.execution.isolation.DataItem;
 import org.dbiir.txnagent.execution.isolation.PartitionManager;
 import org.dbiir.txnagent.execution.isolation.Transaction;
 import org.dbiir.txnagent.execution.validation.ValidationSet;
@@ -30,6 +31,7 @@ public class StatisticsWorker implements Runnable {
   private static final String ip = "localhost";
   private static final int port = 7654;
   private static final int INTERVAL_SECONDS = 5;
+  private static final int HISTOGRAM_BUCKETS = 10;
 
   private RandomGenerator random;
   // cross transaction statistic
@@ -74,7 +76,7 @@ public class StatisticsWorker implements Runnable {
   private PrintWriter out;
   private BufferedReader in;
   private static String headFormat = "%d#%d#%.2f#%.2f";
-  private static String nodeFormat = "%d#%.4f#%.4f#%.4f#%d";
+  private static String nodeFormat = "%d#%.4f#%d#%d#%d#%d#%d";
   private static String edgeFormat = "%d#%d#%d";
   private static String infoRequestFormat = "online,%s";
 
@@ -204,17 +206,28 @@ public class StatisticsWorker implements Runnable {
       ValidationSet readSet = p.getReadSet();
       int readItemCount = readSet.getItemCount();
       for (int i = 0; i < readItemCount; i++) {
-        int partitionId = readSet.get(i).getDataItem().getPartitionId();
+        DataItem dataItem = readSet.get(i).getDataItem();
+        int partitionId = dataItem.getPartitionId();
         partitions.add(partitionId);
         partitionStats.get(partitionId).getReadCount().incrementAndGet();
+        // Histogram: bucket by key position within partition
+        int partSize = PartitionManager.getInstance().getPartitionSize(dataItem.getRelationName());
+        int bucket = (int) ((long) (dataItem.getKey() % partSize) * HISTOGRAM_BUCKETS / partSize);
+        bucket = Math.min(bucket, HISTOGRAM_BUCKETS - 1);
+        partitionStats.get(partitionId).getReadHistogram()[bucket]++;
       }
 
       ValidationSet writeSet = p.getWriteSet();
       int writeItemCount = writeSet.getItemCount();
       for (int i = 0; i < writeItemCount; i++) {
-        int partitionId = writeSet.get(i).getDataItem().getPartitionId();
+        DataItem dataItem = writeSet.get(i).getDataItem();
+        int partitionId = dataItem.getPartitionId();
         partitions.add(partitionId);
         partitionStats.get(partitionId).getWriteCount().incrementAndGet();
+        int partSize = PartitionManager.getInstance().getPartitionSize(dataItem.getRelationName());
+        int bucket = (int) ((long) (dataItem.getKey() % partSize) * HISTOGRAM_BUCKETS / partSize);
+        bucket = Math.min(bucket, HISTOGRAM_BUCKETS - 1);
+        partitionStats.get(partitionId).getWriteHistogram()[bucket]++;
       }
     }
 
@@ -235,22 +248,31 @@ public class StatisticsWorker implements Runnable {
   }
 
   private String getPartitionStats() {
-    // head: nodeCount#edgeCount#throughput#abortRate
-    // node: id#readCount#writeCount#abortRatio#workloadIntensive#isolationLevel
+    // node:
+    // id#workloadIntensity#isolationLevel#readCount#writeCount#commitCount#abortCount#readHist(10)#writeHist(10)
     // edge: id1#id2#count
     StringBuilder nodes = new StringBuilder();
     for (int i = 0; i < maxPartitionId; i++) {
       PartitionStat stat = partitionStats.get(i);
-      nodes
-          .append(
-              String.format(
-                  nodeFormat,
-                  i,
-                  stat.getReadRatio(),
-                  stat.getAbortRatio(),
-                  stat.getWorkloadIntensity(sampledTxnCount.get()),
-                  transferIsolationLevelToInt(PartitionManager.getInstance().getIsolation(i))))
-          .append("\n");
+      StringBuilder line = new StringBuilder();
+      line.append(String.format(
+          nodeFormat,
+          i,
+          stat.getWorkloadIntensity(sampledTxnCount.get()),
+          transferIsolationLevelToInt(PartitionManager.getInstance().getIsolation(i)),
+          stat.getReadCount().get(),
+          stat.getWriteCount().get(),
+          stat.getCommitCount().get(),
+          stat.getAbortCount().get()));
+      // Append read histogram (10 buckets)
+      for (int b = 0; b < HISTOGRAM_BUCKETS; b++) {
+        line.append("#").append(stat.getReadHistogram()[b]);
+      }
+      // Append write histogram (10 buckets)
+      for (int b = 0; b < HISTOGRAM_BUCKETS; b++) {
+        line.append("#").append(stat.getWriteHistogram()[b]);
+      }
+      nodes.append(line).append("\n");
     }
 
     StringBuilder edges = new StringBuilder();
@@ -379,16 +401,11 @@ public class StatisticsWorker implements Runnable {
     private AtomicInteger writeCount = new AtomicInteger(0);
     private AtomicInteger abortCount = new AtomicInteger(0);
     private AtomicInteger commitCount = new AtomicInteger(0);
+    private int[] readHistogram = new int[HISTOGRAM_BUCKETS];
+    private int[] writeHistogram = new int[HISTOGRAM_BUCKETS];
 
     public PartitionStat(int partitionId) {
       this.partitionId = partitionId;
-    }
-
-    public float getReadRatio() {
-      int total = readCount.get() + writeCount.get();
-      if (total == 0)
-        return 0.0f;
-      return (float) readCount.get() / total;
     }
 
     public float getWorkloadIntensity(int totalSampledTxns) {
@@ -397,15 +414,13 @@ public class StatisticsWorker implements Runnable {
       return 1.0f * (abortCount.get() + commitCount.get()) / totalSampledTxns;
     }
 
-    public float getAbortRatio() {
-      return 1.0f * abortCount.get() / Math.max(abortCount.get() + commitCount.get(), 1);
-    }
-
     public void reset() {
       readCount.set(0);
       writeCount.set(0);
       abortCount.set(0);
       commitCount.set(0);
+      readHistogram = new int[HISTOGRAM_BUCKETS];
+      writeHistogram = new int[HISTOGRAM_BUCKETS];
     }
   }
 }

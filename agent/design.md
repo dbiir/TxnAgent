@@ -34,23 +34,27 @@ class PartitionNode:
     p_id: int                    # partition ID
     isolation_level: int         # 0=RC, 1=SI, 2=SER
     mu: int                      # timestamp interval parameter
-    p_start: int                 # micro-partition range start
-    capacity: int                # number of micro-partitions (8)
+    p_start: int                 # partition range start
+    capacity: int                # partition capacity
     is_leaf: bool                # can split / change_iso / adjust_interval
     can_merge: bool              # can merge children
     left: PartitionNode          # left child (after split)
     right: PartitionNode         # right child (after split)
-    micro_partition_features: Tensor  # shape [8, 4]: per-micro features
+    partition_features: Tensor       # shape [4, 26]: per-partition features
     workload_intensity: float
     current_embedding: Tensor
     previous_embedding: Tensor
 ```
 
-**Micro-partition features** (4 per micro-partition):
-- `read_ratio` = read_count / (read_count + write_count)
-- `abort_ratio`
+**Partition features** (26 per partition):
 - `workload_intensity`
-- `isolation_level`
+- `isolation_level` (normalized: 0/0.5/1.0)
+- `read_count`
+- `write_count`
+- `commit_count`
+- `abort_count`
+- `read_histogram[10]` — spatial distribution of reads across 10 buckets
+- `write_histogram[10]` — spatial distribution of writes across 10 buckets
 
 ### PartitionGraph (Python: `graph.py`)
 
@@ -62,7 +66,7 @@ class PartitionGraph:
     abort_ratio: float                      # global abort rate
 ```
 
-**Configuration**: Loaded dynamically from `config/partition/<workload>/partition.yaml`. Each macro partition contains 8 micro-partitions.
+**Configuration**: Loaded dynamically from `config/partition/<workload>/partition.yaml`.
 
 ---
 
@@ -70,14 +74,14 @@ class PartitionGraph:
 
 Two modes controlled by `USE_GRAPH_EMBEDDING` flag (default: **False**):
 
-| Mode | Features (32-dim) | Description |
+| Mode | Features (104-dim) | Description |
 |------|-------------------|-------------|
-| **Direct** (`False`) | `partition.get_node_features()` | Flattened micro-partition features: 8 × 4 = 32 |
+| **Direct** (`False`) | `partition.get_node_features()` | Flattened partition features: 4 × 26 = 104 |
 | **GNN** (`True`) | `GraphEmbeddingModel` output | GNN encodes graph structure into embeddings |
 
-**State vector** (36-dim):
+**State vector** (108-dim):
 ```
-state = [features(32), isolation_level, mu, is_leaf, can_merge]
+state = [features(104), isolation_level, mu, is_leaf, can_merge]
 ```
 
 ---
@@ -87,11 +91,12 @@ state = [features(32), isolation_level, mu, is_leaf, can_merge]
 Only **leaf** and **can_merge** nodes are candidates.
 
 **Heuristic scoring** (`heuristic.py`):
-$$S_{p_i} = \lambda \cdot I + (1 - \lambda) \cdot D$$
+$$S_{p_i} = w \cdot I + (1 - w) \cdot D$$
 
 - $I$ = workload intensity
 - $D$ = 1 − cosine_similarity(current_embedding, previous_embedding) / 2
-- $\lambda = \frac{2}{e^t + e^{-t}}$ (decays over time: prioritizes intensity early, diversity later)
+- $w = e^{-\lambda \Delta t}$ where $\Delta t$ = steps since partition was last selected ($\lambda = 0.7$)
+- Recently-selected partitions get lower intensity weight (more diversity-focused)
 
 Most valuable partition is selected for adjustment each iteration.
 
@@ -102,11 +107,11 @@ Most valuable partition is selected for adjustment each iteration.
 ### Actor Network (`rl_model.py → MultiHeadParameterizedActor`)
 
 ```
-state(36) → shared_trunk(128→64) → action_logits(4)
-                                  → split_head(64→6)  → iso_l, mu_l, iso_r, mu_r
-                                  → merge_head(64→4)  → iso, mu
-                                  → iso_head(64→3)    → iso (Categorical)
-                                  → interval_head(64→2) → mu (Normal)
+state(108) → LayerNorm → shared_trunk(256→128) → action_logits(4)
+                                                → split_head(128→6)  → iso_l, mu_l, iso_r, mu_r
+                                                → merge_head(128→4)  → iso, mu
+                                                → iso_head(128→3)    → iso (Categorical)
+                                                → interval_head(128→2) → mu (Normal)
 ```
 
 **Action masking**: invalid actions are masked to $-\infty$ before softmax.
@@ -123,7 +128,7 @@ state(36) → shared_trunk(128→64) → action_logits(4)
 ### Critic Network
 
 ```
-state(36) → Linear(128) → ReLU → Linear(64) → ReLU → Linear(1) → value
+state(108) → LayerNorm → Linear(256) → ReLU → Linear(128) → ReLU → Linear(1) → value
 ```
 
 ---
@@ -157,7 +162,7 @@ $$P_c = \eta_c \cdot \frac{C_t - C_0}{C_0} + (1 - \eta_c) \cdot \frac{C_t - C_{t
 | clip_eps | 0.2 | PPO clipping range |
 | γ | 0.99 | Discount factor |
 | λ | 0.95 | GAE lambda |
-| entropy_coef | 0.01 | Entropy bonus |
+| entropy_coef | 0.05 | Entropy bonus |
 
 ### Online Adaptation (`agent.py → service()`)
 
@@ -205,7 +210,7 @@ python -m agent.offline_train_rl --data_dir metas/transitions --epochs 200
 ### Java → Python (`StatisticsWorker`)
 
 Sample file header: `nodeCount#edgeCount#throughput#abortRate`  
-Node line: `id#readRatio#abortRatio#workloadIntensity#isolationLevel`  
+Node line (27 fields): `id#workloadIntensity#isolationLevel#readCount#writeCount#commitCount#abortCount#readHist0#...#readHist9#writeHist0#...#writeHist9`  
 Edge line: `src#dst#count`  
 
 Socket message: `"online,<filepath>"`  
@@ -213,7 +218,7 @@ Shutdown message: `"close"`
 
 ### Python → Java
 
-Response: `"id#iso#mu;id#iso#mu;..."` — one entry per micro-partition.
+Response: `"id#iso#mu;id#iso#mu;..."` — one entry per partition.
 
 Java `applyActions()` parses each entry and calls:
 - `PartitionManager.setIsolation(id, level)`

@@ -15,8 +15,8 @@ import pandas as pd
 import os
 
 class TxnAgent:
-    # State dimension: 32 (graph embedding) + 4 (iso, mu, is_leaf, can_merge)
-    STATE_DIM = 36
+    # State dimension: 104 (4 micro × 26 feats) + 4 (iso, mu, is_leaf, can_merge)
+    STATE_DIM = 108
     ACTION_TYPES = ['split', 'merge', 'change_iso', 'adjust_interval']
 
     REWARD_ALPHA = 0.7   # α: weight performance vs correctness in final reward
@@ -26,9 +26,9 @@ class TxnAgent:
     USE_GRAPH_EMBEDDING = False  # True = GNN embedding, False = raw partition features
     MIN_BASELINE_TPUT = 100      # minimum throughput (req/s) before establishing baseline
 
-    def __init__(self, workload: str = 'ycsb'):
+    def __init__(self, workload: str = 'ycsb', max_micro_partitions: int = 4):
         self.workload = workload
-        self.max_micro_partitions = 8
+        self.max_micro_partitions = max_micro_partitions
 
         # Read partition layout from YAML
         partition_yaml = os.path.join(
@@ -123,8 +123,8 @@ class TxnAgent:
     def _load_partition_config(self, yaml_path: str):
         """Read partition YAML and compute partition_cnt and marco_partition_capacity.
 
-        partition_cnt = sum(relation.partitionCount for all relations) / 8
-        marco_partition_capacity = {macro_idx: partitionSize * 8}
+        partition_cnt = sum(relation.partitionCount for all relations) / max_micro_partitions
+        marco_partition_capacity = {macro_idx: partitionSize * max_micro_partitions}
         """
         with open(yaml_path, 'r') as f:
             data = yaml.safe_load(f)
@@ -133,21 +133,21 @@ class TxnAgent:
         relations = workload_data.get('relations', [])
 
         total_micro_partitions = 0
-        marco_capacity = {}  # macro_partition_idx -> capacity (partitionSize * 8)
+        marco_capacity = {}  # macro_partition_idx -> capacity (partitionSize * max_micro_partitions)
         macro_idx = 0
 
         for rel in relations:
             partition_size = rel['partitionSize']
             partition_count = rel['partitionCount']
             total_micro_partitions += partition_count
-            # Each macro partition groups 8 micro partitions
-            num_macro = partition_count // 8
-            capacity = partition_size * 8
+            # Each macro partition groups max_micro_partitions micro partitions
+            num_macro = partition_count // self.max_micro_partitions
+            capacity = partition_size * self.max_micro_partitions
             for _ in range(num_macro):
                 marco_capacity[macro_idx] = capacity
                 macro_idx += 1
 
-        partition_cnt = total_micro_partitions // 8
+        partition_cnt = total_micro_partitions // self.max_micro_partitions
         print(f"[TxnAgent] Loaded partition config: {partition_cnt} macro partitions, "
               f"capacities={marco_capacity}", flush=True)
         return partition_cnt, marco_capacity
@@ -193,7 +193,7 @@ class TxnAgent:
                 for idx, nid in enumerate(node_ids)
             }
         else:
-            # Direct mode: use raw partition features (8 micro × 4 feats = 32-dim)
+            # Direct mode: use raw partition features (4 micro × 26 feats = 104-dim)
             embeddings = {
                 nid: graph.nodes[nid].get_node_features()
                 for nid in graph.nodes
@@ -381,8 +381,10 @@ class TxnAgent:
             k: torch.tensor(v, dtype=torch.float32)
             for k, v in buf['action_params'].items()
         }
+        rewards = torch.tensor(buf['rewards'], dtype=torch.float32)
+        dones = torch.tensor(buf['dones'], dtype=torch.float32)
         return (states, action_types, action_params, action_masks,
-                buf['rewards'], buf['dones'], old_log_probs)
+                rewards, dones, old_log_probs)
 
     def _clear_buffer(self):
         """Reset the experience buffer."""
@@ -431,11 +433,13 @@ class TxnAgent:
         task_batch = [(support_data, query_data)]
         meta_loss = self.rl_agent.meta_update(task_batch)
 
-        # Critic update on query states
+        # Critic update on query states (recompute values fresh)
         q_states = full_data[0][mid:n]
         from agent.rl_model import compute_gae
+        with torch.no_grad():
+            fresh_values = self.rl_agent.critic(q_states).squeeze(-1).tolist()
         advantages, returns = compute_gae(
-            buf['rewards'][mid:], buf['values'][mid:], buf['dones'][mid:]
+            buf['rewards'][mid:], fresh_values, buf['dones'][mid:]
         )
         critic_loss = self.rl_agent.update_critic(q_states, returns)
 
@@ -548,7 +552,7 @@ class TxnAgent:
         return alpha * r_p - (1 - alpha) * p_c
 
     def prepare_state(self, partition: PartitionNode, embedding: torch.Tensor) -> torch.Tensor:
-        """Build state vector: [embedding(32), iso_level, mu, is_leaf, can_merge]"""
+        """Build state vector: [embedding(104), iso_level, mu, is_leaf, can_merge]"""
         return torch.cat([
             embedding,
             torch.tensor([
@@ -874,25 +878,29 @@ class TxnAgent:
             raise ValueError(f"Invalid head line: {lines[0]}") from e
 
         # ---- parse nodes ----
-        # format: id#readRatio#abortRatio#workloadIntensity#isolationLevel
+        # format: id#workloadIntensity#isolationLevel#readCount#writeCount#commitCount#abortCount#readHist(10)#writeHist(10)
         idx = 1
         for i in range(node_count):
             if idx >= len(lines):
                 raise ValueError("Unexpected EOF while reading nodes")
 
             parts = lines[idx].split("#")
-            if len(parts) != 5:
-                raise ValueError(f"Invalid node line (expected 5 fields): {lines[idx]}")
+            if len(parts) != 27:
+                raise ValueError(f"Invalid node line (expected 27 fields): {lines[idx]}")
 
             id = int(parts[0])
             if id != i:
                 raise ValueError(f"Node ID mismatch: expected {i}, got {id}")
 
-            read_ratio = float(parts[1])
-            abort_ratio = float(parts[2])
-            workload_intensity = float(parts[3])
-            isolation_level = int(parts[4]) / 2.0
-            features = [read_ratio, abort_ratio, workload_intensity, isolation_level]
+            workload_intensity = float(parts[1])
+            isolation_level = int(parts[2]) / 2.0
+            read_count = int(parts[3])
+            write_count = int(parts[4])
+            commit_count = int(parts[5])
+            abort_count = int(parts[6])
+            read_hist = [int(parts[7 + b]) for b in range(10)]
+            write_hist = [int(parts[17 + b]) for b in range(10)]
+            features = [workload_intensity, isolation_level, read_count, write_count, commit_count, abort_count] + read_hist + write_hist
             partition_info[i // self.max_micro_partitions].update_micro_partition_features(i % self.max_micro_partitions, features)
             idx += 1
             

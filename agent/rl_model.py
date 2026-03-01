@@ -20,7 +20,7 @@ class MultiHeadParameterizedActor(nn.Module):
 
     ACTION_TYPES = ['split', 'merge', 'change_iso', 'adjust_interval']
 
-    def __init__(self, state_dim, hidden_dim=128):
+    def __init__(self, state_dim, hidden_dim=256):
         super().__init__()
 
         # Shared feature extractor (LayerNorm normalizes raw inputs)
@@ -209,7 +209,7 @@ Actor = MultiHeadParameterizedActor
 # ============================================================
 
 class Critic(nn.Module):
-    def __init__(self, state_dim, hidden_dim=128):
+    def __init__(self, state_dim, hidden_dim=256):
         super().__init__()
         self.net = nn.Sequential(
             nn.LayerNorm(state_dim),
@@ -322,7 +322,7 @@ class MetaPPO:
         clip_eps=0.2,
         gamma=0.99,
         lam=0.95,
-        entropy_coef=0.01
+        entropy_coef=0.05
     ):
 
         self.actor = MultiHeadParameterizedActor(state_dim)
@@ -370,8 +370,8 @@ class MetaPPO:
 
         log_probs = type_lp + param_lp
 
-        # Clamp log-ratio to prevent exp() overflow → inf → NaN weights
-        log_ratio = (log_probs - old_log_probs).clamp(-20, 20)
+        # Clamp log-ratio to prevent exp() overflow (exp(5)≈148, plenty for PPO)
+        log_ratio = (log_probs - old_log_probs).clamp(-5, 5)
         print("log_ratio: ", log_ratio)
         ratio = torch.exp(log_ratio)
 
@@ -458,9 +458,9 @@ class MetaPPO:
 
         meta_loss /= len(task_batch)
 
-        # Skip update if loss is inf/NaN to prevent weight corruption
+        # Skip update if loss is inf/NaN or too large to prevent weight corruption
         loss_val = meta_loss.item()
-        if not math.isfinite(loss_val):
+        if not math.isfinite(loss_val) or abs(loss_val) > 10:
             print(f"[WARN] meta_loss={loss_val}, skipping update", flush=True)
             return loss_val
 

@@ -6,6 +6,8 @@ from typing import List, Dict, Tuple, Optional
 class PartitionNode:
     """Partition node class corresponding to vertex V in the graph"""
     _next_id = 0  # class-level global unique ID counter
+    MICRO_PARTITIONS = 4   # class-level default; override before constructing
+    FEATURE_DIM = 26       # 6 base + 10 readHist + 10 writeHist
 
     @classmethod
     def allocate_id(cls) -> int:
@@ -28,8 +30,9 @@ class PartitionNode:
         self.mu = mu  # parameter for timestamp interval adjustment
         self.key_range_start = key_range_start
         self.capacity = capacity
-        if capacity % 8 != 0 or key_range_start % capacity != 0:
-            raise ValueError("Capacity [" + str(capacity) + "] must be multiple of 8 and key_range_start must be aligned with capacity")
+        self.max_micro_partitions = PartitionNode.MICRO_PARTITIONS
+        if capacity % self.max_micro_partitions != 0 or key_range_start % capacity != 0:
+            raise ValueError(f"Capacity [{capacity}] must be multiple of {self.max_micro_partitions} and key_range_start must be aligned with capacity")
         self.level_from_top = 1
         self.is_leaf = True
         self.can_merge = False
@@ -39,12 +42,10 @@ class PartitionNode:
         self.father = None  # type: Optional[PartitionNode]
         self.left = None  # type: Optional[PartitionNode]
         self.right = None # type: Optional[PartitionNode]
-        # Each partition contains 8 micro partitions, each with 4 feature dimensions
-        self.max_micro_partitions = 8
         self.capacity_per_micro_partition = capacity / self.max_micro_partitions
         self.p_start = self.key_range_start % (self.max_micro_partitions * self.capacity_per_micro_partition) // self.capacity_per_micro_partition;
         self.p_end = self.p_start + self.max_micro_partitions // np.power(2, self.level_from_top - 1)
-        self.micro_partition_features = torch.randn(self.max_micro_partitions, 4)  # [write/read ratio, abort_rate, workload_intensive, isolation_level]
+        self.micro_partition_features = torch.randn(self.max_micro_partitions, PartitionNode.FEATURE_DIM)
 
     def get_node_features(self) -> torch.Tensor:
         """Get node feature vector by aggregating micro-partition features"""
@@ -53,10 +54,10 @@ class PartitionNode:
 
     @property
     def workload_intensity(self) -> float:
-        """Average workload intensity across active micro-partitions (feature index 2)."""
+        """Average workload intensity across active micro-partitions (feature index 0)."""
         start = int(self.p_start)
         end = int(self.p_end)
-        return self.micro_partition_features[start:end, 2].max().item()
+        return self.micro_partition_features[start:end, 0].max().item()
     
     def is_includess_micro_partition(self, micro_idx: int) -> bool:
         return self.p_start <= micro_idx < self.p_end
@@ -66,7 +67,7 @@ class PartitionNode:
         micro idx: the offset of micro-partition in the partition
         Update features of a specific micro-partition
         """
-        if micro_idx > self.max_micro_partitions or len(features) != 4:
+        if micro_idx > self.max_micro_partitions or len(features) != PartitionNode.FEATURE_DIM:
             raise ValueError("Invalid micro-partition index or feature length")
         self.micro_partition_features[micro_idx] = torch.tensor(features)
         if self.is_leaf:
@@ -107,7 +108,7 @@ class PartitionNode:
         left = PartitionNode(left_id, iso_l, mu_l, self.key_range_start, self.capacity // 2)
         left.father = self
         left.level_from_top = self.level_from_top + 1
-        left.micro_partition_features = torch.zeros(self.max_micro_partitions, 4)
+        left.micro_partition_features = torch.zeros(self.max_micro_partitions, PartitionNode.FEATURE_DIM)
         for i in range(int(p_cnt // 2)):
             left.micro_partition_features[int(self.p_start + i)] = self.micro_partition_features[int(self.p_start + i)]
         
@@ -115,7 +116,7 @@ class PartitionNode:
         right = PartitionNode(right_id, iso_r, mu_r, self.key_range_start + self.capacity // 2, self.capacity // 2)
         right.father = self
         right.level_from_top = self.level_from_top + 1
-        right.micro_partition_features = torch.zeros(self.max_micro_partitions, 4)
+        right.micro_partition_features = torch.zeros(self.max_micro_partitions, PartitionNode.FEATURE_DIM)
         for i in range(int(p_cnt // 2)):
             right.micro_partition_features[int(self.p_start + i + p_cnt // 2)] = self.micro_partition_features[int(self.p_start + i + p_cnt // 2)]
 
